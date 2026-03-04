@@ -194,10 +194,12 @@ def build_server(project_root: Path, output_dir: Path) -> None:
     # Step 4: Copy the compiled binary to output directory
     print("\n📦 Copying binary to output directory...")
     binary_base = "dazense-chat-server"
-    binary_src = backend_dir / binary_base
     if sys.platform == "win32":
         binary_src = backend_dir / f"{binary_base}.exe"
-    binary_dst = output_dir / binary_base
+        binary_dst = output_dir / f"{binary_base}.exe"
+    else:
+        binary_src = backend_dir / binary_base
+        binary_dst = output_dir / binary_base
     shutil.copy2(binary_src, binary_dst)
     print(f"   Binary: {binary_dst}")
 
@@ -331,7 +333,8 @@ def build(
     cli_dir = Path(__file__).parent
     project_root = cli_dir.parent
     output_dir = cli_dir / "dazense_core" / "bin"
-    binary_path = output_dir / "dazense-chat-server"
+    binary_name = "dazense-chat-server.exe" if sys.platform == "win32" else "dazense-chat-server"
+    binary_path = output_dir / binary_name
     public_dir = output_dir / "public"
     sqlite_migrations_dir = output_dir / "migrations-sqlite"
     postgres_migrations_dir = output_dir / "migrations-postgres"
