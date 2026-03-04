@@ -71,7 +71,7 @@ jobs:
               run: uv pip install --system cyclopts
 
             - name: Install npm dependencies
-              run: rm -f package-lock.json && npm install
+              run: npm ci
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
