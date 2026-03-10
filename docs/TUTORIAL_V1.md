@@ -345,7 +345,7 @@ before it runs.
 dazense eval
 ```
 
-This runs 9 test cases from the bundle and produces a governance scorecard:
+This runs 15 test cases from the bundle and produces a governance scorecard:
 
 ```
 Governance Scorecard
@@ -360,20 +360,55 @@ Governance Scorecard
 
   Score: 7/8
 
-Running 9 test case(s)...
+Running 15 test case(s)...
 
-  revenue_accuracy     metric_accuracy     PASS  total_revenue = 1585
-  pii_block_names      pii_protection      PASS  PII block triggered
-  pii_alternative      pii_protection      PASS  (allowed without PII)
-  out_of_scope_table   bundle_enforcement  PASS  Bundle enforcement active
-  time_filter_required time_filter         PASS  Time filter required for main.orders
-  all_time_resolution  time_filter         PASS  order_count = 99
-  ambiguity_placed     ambiguity           PASS  Ambiguity field in schema
-  business_rules_audit audit_trail         PASS  Rules exist
-  approved_join        join_enforcement    PASS  (allowed)
+  revenue_accuracy          metric_accuracy     PASS  total_revenue = 1585
+  pii_block_names           pii_protection      PASS  PII block triggered
+  pii_block_alias           pii_protection      PASS  PII block triggered
+  pii_block_star            pii_protection      PASS  PII block triggered
+  pii_alternative           pii_protection      PASS  (allowed without PII)
+  out_of_scope_table        bundle_enforcement  PASS  Bundle enforcement active
+  bundle_block_subquery     bundle_enforcement  PASS  Bundle enforcement active
+  time_filter_required      time_filter         PASS  Time filter required for main.orders
+  time_filter_join_required time_filter         PASS  Time filter required for main.orders
+  all_time_resolution       time_filter         PASS  order_count = 99
+  all_time_variant          time_filter         PASS  order_count = 99
+  ambiguity_placed          ambiguity           PASS  Ambiguity field in schema
+  business_rules_audit      audit_trail         PASS  Rules exist
+  business_rules_revenue_month audit_trail      PASS  Rules exist
+  approved_join             join_enforcement    PASS  (allowed)
 
-✓ All 9 test(s) passed
+✓ All 15 test(s) passed
 ```
+
+The new test cases cover additional attack vectors:
+
+- **pii_block_alias** — PII accessed through SQL aliases (`concat(first_name, last_name)`)
+- **pii_block_star** — PII exposed through `SELECT *` on a table with PII columns
+- **bundle_block_subquery** — Out-of-scope table accessed via subquery/CTE
+- **time_filter_join_required** — Time filter enforcement when using JOINs
+- **all_time_variant** — Explicit "all time" date range resolution
+- **business_rules_revenue_month** — Revenue by month with business rules audit
+
+### Engine mode
+
+By default, `dazense eval` uses structural heuristics — checking schemas, fields,
+and configuration without running the actual policy engine. For deeper validation,
+use the `--engine` flag to run real policy checks:
+
+```powershell
+dazense eval --engine
+```
+
+Engine mode evaluates each test case through a Python-native policy engine that
+replicates the TypeScript enforcement logic:
+
+- PII column scanning with word-boundary regex (catches aliases, `SELECT *`, WHERE)
+- Bundle table scope validation (catches subqueries and CTEs)
+- Time filter enforcement with measure-to-table resolution via semantic model YAML
+- Business rules matching against applicable models and measures
+
+This is useful for catching subtle policy gaps that structural checks miss.
 
 The scorecard-only mode is useful for quick checks:
 
@@ -548,7 +583,8 @@ execution:
 
 ```powershell
 dazense validate             # Check config consistency
-dazense eval                 # Run test cases
+dazense eval                 # Run test cases (structural heuristics)
+dazense eval --engine        # Run test cases (real policy engine)
 dazense eval --scorecard     # Check for configuration gaps
 ```
 
@@ -591,3 +627,4 @@ Fix the constraint, re-run, repeat until convergence.
 - Read `docs/findings-llm-governance-comparison.md` for detailed test results
 - Review `docs/REVIEW_ASSIGNMENT.md` for the full file list and design decisions
 - Run `dazense eval --scorecard` regularly to catch configuration drift
+- Run `dazense eval --engine` to validate policy enforcement with real checks
