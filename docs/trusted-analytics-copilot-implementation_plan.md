@@ -1,6 +1,6 @@
 # Trusted Analytics Copilot — Implementation Plan (Dazense)
 
-> **Status:** V1 is fully implemented. All deliverables in Section 9 are complete. See `docs/TESTING_V1.md` for a hands-on tutorial and `docs/architecture.md` for the updated architecture diagram.
+> **Status:** V1 is fully implemented. V1.5 (Governance Knowledge Graph) is complete with 84 passing tests (53 Python, 24 TypeScript, 7 cross-language parity). Next: V1.6 (Graph-as-Tools) → V2 (OpenMetadata Integration). See `docs/TESTING_V1.md` for a hands-on tutorial and `docs/architecture.md` for the updated architecture diagram.
 
 ## 1. Why We're Doing This
 
@@ -456,13 +456,117 @@ This prevents accidental bypasses if tools are called directly.
 
 ---
 
+## 4b. V1.5: Governance Knowledge Graph (Complete)
+
+The governance graph is a **compiled intermediate representation (IR)** — all YAML source files are compiled into a typed, traversable in-memory graph with canonical node IDs and semantic edges.
+
+> See `docs/governance-graph-implementation-plan.md` for the full design.
+
+### What was built
+
+- **10 node types**: Bundle, Table, Column, Model, Dimension, Measure, Rule, Classification, Policy, JoinEdge (+ Contract, PolicyCheck for decision traces)
+- **17 edge types**: DEFINES, APPLIES_TO, BLOCKS, CONTAINS, READS, AGGREGATES, FILTERS_ON, CLASSIFIES, WRAPS, ALLOWS_JOIN, JOIN_LEFT, JOIN_RIGHT, JOINS_WITH, REQUIRES_TIME_FILTER (+ TOUCHED, USED, REFERENCED, DECIDED, FAILED for contracts)
+- **Dual implementation**: Python (`cli/dazense_core/graph/`) and TypeScript (`apps/backend/src/graph/`) with identical output
+- **Core API**: `compile()`, `lineageOf()`, `impactOf()`, `findGaps()`, `findUnblockedPiiColumns()`, `simulate()`, `toJSON()`
+- **Contract ingestion** (Python): reads `contracts/runs/*.json` into the graph as decision-trace nodes/edges
+
+### Test coverage (84 tests)
+
+| Suite                       | Tests | Location                                                |
+| --------------------------- | ----- | ------------------------------------------------------- |
+| Python graph invariants     | 33    | `cli/tests/dazense_core/graph/test_governance_graph.py` |
+| Python contract traces      | 20    | `cli/tests/dazense_core/graph/test_contracts.py`        |
+| TypeScript graph invariants | 24    | `apps/backend/tests/graph/governance-graph.test.ts`     |
+| Cross-language parity       | 7     | `cli/tests/dazense_core/graph/test_parity.py`           |
+
+### Why it matters
+
+The graph is the **merge layer** for V2 (OpenMetadata). Instead of ad-hoc reconciliation between YAML declarations and discovered catalog metadata, both feed into the same typed graph. All queries (lineage, impact, gaps, simulation) work across both sources without new code.
+
+---
+
+## 4c. V1.6: Graph-as-Tools (Next)
+
+Expose governance graph queries as **agent-callable tools** so the agent can reason over the graph, explain its decisions, and answer "why" questions.
+
+### Why now (before V2)
+
+The contract system gives the agent allow/block/clarify decisions, but the agent can't **explain** them. Users ask "why was this blocked?", "what depends on this table?", "what rules apply to revenue?" — today the agent can't answer. Graph-as-tools closes this UX gap.
+
+After V2 (OpenMetadata), these tools become even more powerful because the agent can explain reasoning over **real** catalog metadata, not just static YAML.
+
+### New agent tools
+
+| Tool            | Query                                      | Example use                                                                          |
+| --------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `graph_lineage` | `lineageOf(entity_id)`                     | "What's upstream of total_revenue?" → column → table → bundle → rules                |
+| `graph_impact`  | `impactOf(entity_id)`                      | "What depends on the orders table?" → models → measures → rules                      |
+| `graph_gaps`    | `findGaps()` / `findUnblockedPiiColumns()` | "Where are we missing governance?" → orphan tables, ungoverned measures, exposed PII |
+| `graph_explain` | Targeted traversal                         | "Why is first_name blocked?" → CLASSIFIES ← class:PII, BLOCKS ← policy:root          |
+| `graph_stats`   | `stats()`                                  | "How big is our governance coverage?" → node/edge counts by type                     |
+
+### Tool interface
+
+```ts
+// graph_lineage
+graph_lineage({ entity_id: "measure:jaffle_shop/orders.total_revenue" })
+→ { path: [{ id, type, relationship }...], summary: "..." }
+
+// graph_impact
+graph_impact({ entity_id: "table:duckdb-jaffle-shop/main.orders" })
+→ { affected: [{ id, type, relationship }...], summary: "..." }
+
+// graph_gaps
+graph_gaps({ check?: "pii" | "models" | "rules" | "all" })
+→ { gaps: [{ node_id, node_type, missing_edge, description }...] }
+
+// graph_explain
+graph_explain({ entity_id: "column:duckdb-jaffle-shop/main.customers/first_name", question: "why blocked?" })
+→ { explanation: "...", edges: [...] }
+```
+
+### Implementation plan
+
+| #   | File                                                   | Purpose                                                            | Status |
+| --- | ------------------------------------------------------ | ------------------------------------------------------------------ | ------ |
+| 1   | `apps/backend/src/agents/tools/graph-lineage.ts`       | `graph_lineage` tool                                               |        |
+| 2   | `apps/backend/src/agents/tools/graph-impact.ts`        | `graph_impact` tool                                                |        |
+| 3   | `apps/backend/src/agents/tools/graph-gaps.ts`          | `graph_gaps` tool                                                  |        |
+| 4   | `apps/backend/src/agents/tools/graph-explain.ts`       | `graph_explain` tool                                               |        |
+| 5   | `apps/backend/src/agents/tools/index.ts`               | Register graph tools (available when project has governance files) |        |
+| 6   | `apps/backend/src/components/tool-outputs/graph-*.tsx` | Output components for graph tool results                           |        |
+| 7   | `apps/backend/src/components/system-prompt.tsx`        | Add graph-query instructions to system prompt                      |        |
+
+### System prompt addition
+
+> **Graph Exploration Rules**
+>
+> - When a user asks "why was this blocked?" or "what depends on X?", use the graph tools to explain.
+> - `graph_lineage` traces upstream: column → table → bundle → rules.
+> - `graph_impact` traces downstream: what depends on this entity.
+> - `graph_gaps` finds missing governance coverage.
+> - `graph_explain` answers "why" questions about specific entities.
+> - Present graph results as readable summaries, not raw JSON.
+
+### Deliverables checklist
+
+- [ ] `graph_lineage` tool — upstream traversal with readable output
+- [ ] `graph_impact` tool — downstream traversal with readable output
+- [ ] `graph_gaps` tool — coverage checks (PII, models, rules)
+- [ ] `graph_explain` tool — targeted "why" explanations
+- [ ] Tool output components for graph results
+- [ ] System prompt updates
+- [ ] Tests: tool unit tests + integration with example project
+
+---
+
 ## 5. V2: OpenMetadata Integration
 
-V2 is built after V1 is stable and proven. The enforcement code is unchanged — only the data inputs improve.
+V2 is built after V1.5 (graph) and V1.6 (graph-as-tools) are stable. The **governance graph is the merge layer**: OpenMetadata feeds discovered metadata into the same typed graph that YAML declarations already populate. All existing queries (lineage, impact, gaps, simulation) and agent tools work across both sources without new traversal code.
 
 ### 5.0 V2 Scope (split to reduce risk)
 
-- **V2a (recommended first):** OpenMetadata snapshot drives PII/owners/certification/quality + provenance UI + policy checks.
+- **V2a (recommended first):** OpenMetadata snapshot → graph nodes/edges for real columns, PII tags, ownership, certification, quality. Policy engine + graph tools automatically reason over discovered metadata.
 - **V2b (later):** lineage-assisted bundle suggestions and partial bundle generation (human review required).
 
 ### 5.1 What OM Adds
@@ -542,7 +646,19 @@ dazense openmetadata sync --url https://om.company.com --token <token>
 | `apps/backend/tests/sql-validator.test.ts`                    | 31 unit tests for SQL validator                          | ✅     |
 | `cli/dazense_core/commands/validate.py`                       | `dazense validate` CLI command                           | ✅     |
 
-> **Note:** Policy loading and bundle loading are implemented as `getPolicies()` and `getDatasetBundles()` in `apps/backend/src/agents/user-rules.ts` (following the existing `getSemanticModels()` pattern), not as separate loader files.
+| `apps/backend/src/graph/types.ts` | Node/edge type enums + graph interfaces | ✅ |
+| `apps/backend/src/graph/governance-graph.ts` | GovernanceGraph class (adjacency list, traversal, query) | ✅ |
+| `apps/backend/src/graph/graph-builder.ts` | `buildFromProject()` compiler from YAML | ✅ |
+| `cli/dazense_core/graph/__init__.py` | Python graph module | ✅ |
+| `cli/dazense_core/graph/types.py` | Python Pydantic graph types | ✅ |
+| `cli/dazense_core/graph/governance_graph.py` | Python standalone compiler + graph | ✅ |
+| `apps/backend/tests/graph/governance-graph.test.ts` | 24 TS graph invariant tests | ✅ |
+| `apps/backend/tests/graph/dump-graph-json.ts` | TS graph JSON dump script for parity testing | ✅ |
+| `cli/tests/dazense_core/graph/test_governance_graph.py` | 33 Python graph invariant tests | ✅ |
+| `cli/tests/dazense_core/graph/test_contracts.py` | 20 Python contract trace tests | ✅ |
+| `cli/tests/dazense_core/graph/test_parity.py` | 7 cross-language parity tests | ✅ |
+
+> **Note:** Policy loading and bundle loading are implemented as `getPolicies()` and `getDatasetBundles()` in `apps/backend/src/agents/user-rules.ts` (following the existing `getSemanticModels()` pattern), not as separate loader files. All loaders now accept an optional `projectFolder` parameter.
 
 ### 6.2 Modified Files
 
@@ -636,11 +752,30 @@ interface CheckResult {
 - [x] UI provenance surfaced in tool output components — `BuildContractOutput` component shows status, contract_id, checks, and feedback
 - [x] Tests: unit + integration for policy engine, contract tool, and gating behavior — 31 tests in `sql-validator.test.ts` covering PII, tables, limits, joins, time columns, multi-statement
 
-### V2 — Done means:
+### V1.5 — Governance Knowledge Graph — Done:
+
+- [x] TypeScript graph compiler (`buildFromProject`) with canonical IDs, 14 structural edge types
+- [x] Python graph compiler (`GovernanceGraph.compile`) with full parity
+- [x] Contract ingestion (Python) — decision-trace nodes/edges from `contracts/runs/*.json`
+- [x] Core API: `lineageOf`, `impactOf`, `findGaps`, `findUnblockedPiiColumns`, `simulate`, `toJSON`
+- [x] 84 tests: 33 Python invariants, 20 contract traces, 24 TS invariants, 7 cross-language parity
+- [x] TS compiler bug fixes: classification array parsing, measure column resolution, FILTERS_ON edges, JOINS_WITH from `to_model`, all loaders accept `projectFolder`
+
+### V1.6 — Graph-as-Tools — Next:
+
+- [ ] `graph_lineage` agent tool — upstream traversal with readable output
+- [ ] `graph_impact` agent tool — downstream traversal with readable output
+- [ ] `graph_gaps` agent tool — coverage checks (PII, models, rules)
+- [ ] `graph_explain` agent tool — targeted "why" explanations
+- [ ] Tool output components for graph results
+- [ ] System prompt updates with graph exploration instructions
+- [ ] Tests: tool unit tests + integration with example project
+
+### V2 — OpenMetadata Integration:
 
 - [ ] OpenMetadata snapshot ingestion (`dazense openmetadata sync`)
-- [ ] V2a: Policy + provenance driven by OM signals (PII/owners/certification/quality)
+- [ ] V2a: OM metadata → graph nodes/edges (real columns, PII tags, ownership, quality)
 - [ ] V2b: Lineage-assisted bundle suggestions / partial generation (reviewed)
-- [ ] PII auto-discovery from OM profiler
+- [ ] PII auto-discovery from OM profiler → graph CLASSIFIES edges
 - [ ] Glossary-driven metric resolution
 - [ ] Live quality gates (block on stale/failing tables)

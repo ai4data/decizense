@@ -47,6 +47,9 @@ class EdgeType(str, Enum):
     DECIDED = "DECIDED"
     FAILED = "FAILED"
 
+    # V2: OpenMetadata discovery edges
+    DISCOVERED_BY = "DISCOVERED_BY"
+
 
 # ── Graph primitives ──
 

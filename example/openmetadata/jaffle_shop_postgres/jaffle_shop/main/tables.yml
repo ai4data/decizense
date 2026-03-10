@@ -1,0 +1,158 @@
+service: jaffle_shop_postgres
+database: jaffle_shop
+schema: main
+tables:
+- name: customers
+  fqn: jaffle_shop_postgres.jaffle_shop.main.customers
+  table_type: Regular
+  description: ''
+  columns:
+  - name: customer_id
+    data_type: INT
+    description: Primary key
+  - name: first_name
+    data_type: VARCHAR
+    description: Customer first name (PII)
+  - name: last_name
+    data_type: VARCHAR
+    description: Customer last name (PII)
+  - name: first_order
+    data_type: DATE
+    description: Date of first order
+  - name: most_recent_order
+    data_type: DATE
+    description: Date of most recent order
+  - name: number_of_orders
+    data_type: BIGINT
+    description: Total number of orders
+  - name: customer_lifetime_value
+    data_type: DOUBLE
+    description: Sum of all order amounts
+- name: orders
+  fqn: jaffle_shop_postgres.jaffle_shop.main.orders
+  table_type: Regular
+  description: ''
+  columns:
+  - name: order_id
+    data_type: INT
+    description: Primary key
+  - name: customer_id
+    data_type: INT
+    description: FK to customers
+  - name: order_date
+    data_type: DATE
+    description: Date order was placed
+  - name: status
+    data_type: VARCHAR
+    description: Order status
+  - name: credit_card_amount
+    data_type: DOUBLE
+    description: Amount paid by credit card
+  - name: coupon_amount
+    data_type: DOUBLE
+    description: Amount paid by coupon
+  - name: bank_transfer_amount
+    data_type: DOUBLE
+    description: Amount paid by bank transfer
+  - name: gift_card_amount
+    data_type: DOUBLE
+    description: Amount paid by gift card
+  - name: amount
+    data_type: DOUBLE
+    description: Total order amount
+- name: raw_customers
+  fqn: jaffle_shop_postgres.jaffle_shop.main.raw_customers
+  table_type: Regular
+  description: ''
+  columns:
+  - name: id
+    data_type: INT
+    description: Primary key
+  - name: first_name
+    data_type: VARCHAR
+    description: Customer first name
+  - name: last_name
+    data_type: VARCHAR
+    description: Customer last name
+- name: raw_orders
+  fqn: jaffle_shop_postgres.jaffle_shop.main.raw_orders
+  table_type: Regular
+  description: ''
+  columns:
+  - name: id
+    data_type: INT
+    description: Primary key
+  - name: user_id
+    data_type: INT
+    description: FK to raw_customers
+  - name: order_date
+    data_type: DATE
+    description: Date order was placed
+  - name: status
+    data_type: VARCHAR
+    description: Order status
+- name: raw_payments
+  fqn: jaffle_shop_postgres.jaffle_shop.main.raw_payments
+  table_type: Regular
+  description: ''
+  columns:
+  - name: id
+    data_type: INT
+    description: Primary key
+  - name: order_id
+    data_type: INT
+    description: FK to raw_orders
+  - name: payment_method
+    data_type: VARCHAR
+    description: Payment method
+  - name: amount
+    data_type: INT
+    description: Payment amount in cents
+- name: stg_customers
+  fqn: jaffle_shop_postgres.jaffle_shop.main.stg_customers
+  table_type: View
+  description: ''
+  columns:
+  - name: customer_id
+    data_type: INT
+    description: Customer ID (renamed from id)
+  - name: first_name
+    data_type: VARCHAR
+    description: Customer first name
+  - name: last_name
+    data_type: VARCHAR
+    description: Customer last name
+- name: stg_orders
+  fqn: jaffle_shop_postgres.jaffle_shop.main.stg_orders
+  table_type: View
+  description: ''
+  columns:
+  - name: order_id
+    data_type: INT
+    description: Order ID (renamed from id)
+  - name: customer_id
+    data_type: INT
+    description: FK to customers (renamed from user_id)
+  - name: order_date
+    data_type: DATE
+    description: Date order was placed
+  - name: status
+    data_type: VARCHAR
+    description: Order status
+- name: stg_payments
+  fqn: jaffle_shop_postgres.jaffle_shop.main.stg_payments
+  table_type: View
+  description: ''
+  columns:
+  - name: payment_id
+    data_type: INT
+    description: Primary key
+  - name: order_id
+    data_type: INT
+    description: FK to orders
+  - name: payment_method
+    data_type: VARCHAR
+    description: Payment method used
+  - name: amount
+    data_type: DOUBLE
+    description: Payment amount

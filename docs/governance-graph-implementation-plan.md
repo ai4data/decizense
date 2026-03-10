@@ -1,6 +1,6 @@
 # Implementation Plan: Governance Graph — Compiled IR from YAML Source
 
-> **Status**: Design complete, not yet implemented. This is a future enhancement to the V1 Trusted Analytics Copilot.
+> **Status**: Phase 1 (compiler + IR) and Phase 2 (contracts + CLI) are **complete** with 84 passing tests (33 Python invariants, 20 contract traces, 24 TypeScript invariants, 7 cross-language parity). Next: graph-as-tools (V1.6) → OpenMetadata integration (V2).
 
 ## Context
 

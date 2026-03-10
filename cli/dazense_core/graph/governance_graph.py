@@ -300,6 +300,9 @@ class GovernanceGraph:
                             if graph.get_node(f"class:{tag}"):
                                 graph._add_edge(GraphEdge(from_=f"class:{tag}", to=col_id, type=EdgeType.CLASSIFIES))
 
+        # ── 5. Contracts (decision traces) ──
+        _ingest_contracts(graph, project_path)
+
         if warnings:
             import sys
 
@@ -438,6 +441,128 @@ class GovernanceGraph:
 
         return GraphStats(nodes_by_type=nodes_by_type, edges_by_type=edges_by_type)
 
+    def enrich_from_openmetadata(self, om_dir: Path) -> list[str]:
+        """Merge discovered metadata from OpenMetadata sync output into this graph.
+
+        Reads openmetadata/<service>/<db>/<schema>/tables.yml files written by
+        the OM sync provider. For each table/column found:
+        - If a matching Table node exists, enriches its properties (description, om_fqn)
+        - If a matching Column node exists, enriches data_type, description, tags
+        - Creates new Column nodes for OM-discovered columns not yet in the graph
+        - Adds DISCOVERED_BY edges from enriched nodes to a synthetic om:<service> node
+
+        Returns list of enrichment actions taken.
+        """
+        import yaml
+
+        if not om_dir.exists():
+            return []
+
+        actions: list[str] = []
+
+        for tables_yml in sorted(om_dir.rglob("tables.yml")):
+            try:
+                data = yaml.safe_load(tables_yml.read_text())
+            except Exception:
+                continue
+
+            if not data or "tables" not in data:
+                continue
+
+            service = data.get("service", "unknown")
+            om_service_id = f"om:{service}"
+
+            # Create OM service node if needed
+            if not self.get_node(om_service_id):
+                self._add_node(
+                    GraphNode(
+                        id=om_service_id,
+                        type=NodeType.Bundle,
+                        properties={
+                            "display_name": f"OpenMetadata: {service}",
+                            "source": "openmetadata",
+                            "certification": "discovered",
+                        },
+                    )
+                )
+
+            schema_name = data.get("schema", "")
+
+            for table_data in data["tables"]:
+                table_name = table_data["name"]
+                om_fqn = table_data.get("fqn", "")
+
+                # Find matching table node by schema.table pattern
+                matched_table_id = self._match_table(schema_name, table_name)
+
+                if matched_table_id:
+                    node = self.get_node(matched_table_id)
+                    if node:
+                        # Enrich existing table with OM metadata
+                        if table_data.get("description"):
+                            node.properties["om_description"] = table_data["description"]
+                        node.properties["om_fqn"] = om_fqn
+                        node.properties["om_table_type"] = table_data.get("table_type", "")
+                        self._add_edge(GraphEdge(from_=matched_table_id, to=om_service_id, type=EdgeType.DISCOVERED_BY))
+                        actions.append(f"enriched table {matched_table_id}")
+
+                    # Enrich columns
+                    for col_data in table_data.get("columns", []):
+                        col_name = col_data["name"]
+                        # Try to find existing column node
+                        col_id = self._match_column(schema_name, table_name, col_name)
+
+                        if col_id and self.get_node(col_id):
+                            col_node = self.get_node(col_id)
+                            if col_node:
+                                if col_data.get("data_type") and col_node.properties.get("data_type") == "unknown":
+                                    col_node.properties["data_type"] = col_data["data_type"]
+                                if col_data.get("description"):
+                                    col_node.properties["om_description"] = col_data["description"]
+                                if col_data.get("tags"):
+                                    col_node.properties["om_tags"] = col_data["tags"]
+                                actions.append(f"enriched column {col_id}")
+                        elif matched_table_id:
+                            # OM discovered a column not in the governance YAML — add it
+                            matched_node = self.get_node(matched_table_id)
+                            db_id = matched_node.properties.get("database_id", "") if matched_node else ""
+                            new_col_id = f"column:{db_id}/{schema_name}.{table_name}/{col_name}"
+                            if not self.get_node(new_col_id):
+                                self._add_node(
+                                    GraphNode(
+                                        id=new_col_id,
+                                        type=NodeType.Column,
+                                        properties={
+                                            "data_type": col_data.get("data_type", "unknown"),
+                                            "is_pii": False,
+                                            "om_description": col_data.get("description", ""),
+                                            "source": "openmetadata",
+                                            **({"om_tags": col_data["tags"]} if col_data.get("tags") else {}),
+                                        },
+                                    )
+                                )
+                                self._add_edge(
+                                    GraphEdge(from_=new_col_id, to=om_service_id, type=EdgeType.DISCOVERED_BY)
+                                )
+                                actions.append(f"discovered column {new_col_id}")
+
+        return actions
+
+    def _match_table(self, schema_name: str, table_name: str) -> str | None:
+        """Find a table node matching schema.table across all database IDs."""
+        for node in self.get_nodes_by_type(NodeType.Table):
+            if node.properties.get("schema") == schema_name and node.properties.get("table") == table_name:
+                return node.id
+        return None
+
+    def _match_column(self, schema_name: str, table_name: str, col_name: str) -> str | None:
+        """Find a column node matching the given schema.table/column pattern."""
+        suffix = f"/{schema_name}.{table_name}/{col_name}"
+        for node in self.get_nodes_by_type(NodeType.Column):
+            if node.id.endswith(suffix):
+                return node.id
+        return None
+
     def to_json(self) -> GraphJSON:
         return GraphJSON(
             nodes=list(self._nodes.values()),
@@ -569,6 +694,88 @@ def _find_nodes_matching(graph: GovernanceGraph, target: str) -> list[str]:
                 matches.append(node.id)
 
     return matches
+
+
+def _ingest_contracts(graph: GovernanceGraph, project_path: Path) -> None:
+    """Read contracts/runs/*.json and emit Contract + PolicyCheck nodes with decision-trace edges."""
+    import json
+
+    runs_dir = project_path / "contracts" / "runs"
+    if not runs_dir.exists():
+        return
+
+    for json_file in sorted(runs_dir.glob("*.json")):
+        try:
+            contract = json.loads(json_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        contract_id = contract.get("contract_id")
+        if not contract_id:
+            continue
+
+        _hash_file(graph, json_file)
+
+        node_id = f"contract:{contract_id}"
+        graph._add_node(
+            GraphNode(
+                id=node_id,
+                type=NodeType.Contract,
+                properties={
+                    "created_at": contract.get("created_at", ""),
+                    "decision": contract.get("policy", {}).get("decision", ""),
+                    "actor": contract.get("actor", {}).get("role", "user"),
+                },
+            )
+        )
+
+        # TOUCHED → tables used in scope
+        scope = contract.get("scope", {})
+        for table_ref in scope.get("tables", []):
+            # table_ref is "schema.table" — find matching table nodes
+            for table_node in graph.get_nodes_by_type(NodeType.Table):
+                schema = table_node.properties.get("schema", "")
+                table_name = table_node.properties.get("table", "")
+                if f"{schema}.{table_name}" == table_ref or table_name == table_ref:
+                    graph._add_edge(GraphEdge(from_=node_id, to=table_node.id, type=EdgeType.TOUCHED))
+
+        # USED → measures referenced in meaning.metrics
+        meaning = contract.get("meaning", {}) or {}
+        for metric in meaning.get("metrics", []):
+            metric_id = metric.get("id", "")
+            # metric_id is "model.measure" — find matching measure nodes
+            for measure_node in graph.get_nodes_by_type(NodeType.Measure):
+                if measure_node.id.endswith(f"/{metric_id}") or measure_node.id.endswith(f".{metric_id}"):
+                    graph._add_edge(GraphEdge(from_=node_id, to=measure_node.id, type=EdgeType.USED))
+
+        # REFERENCED → rules cited in meaning.guidance_rules_referenced
+        for rule_name in meaning.get("guidance_rules_referenced", []):
+            rule_node_id = f"rule:{rule_name}"
+            if graph.get_node(rule_node_id):
+                graph._add_edge(GraphEdge(from_=node_id, to=rule_node_id, type=EdgeType.REFERENCED))
+
+        # DECIDED / FAILED → PolicyCheck nodes
+        policy = contract.get("policy", {})
+        for check in policy.get("checks", []):
+            check_name = check.get("name", "")
+            check_node_id = f"check:{contract_id}/{check_name}"
+            check_status = check.get("status", "pass")
+
+            graph._add_node(
+                GraphNode(
+                    id=check_node_id,
+                    type=NodeType.PolicyCheck,
+                    properties={
+                        "status": check_status,
+                        "detail": check.get("detail", ""),
+                    },
+                )
+            )
+
+            if check_status == "fail":
+                graph._add_edge(GraphEdge(from_=node_id, to=check_node_id, type=EdgeType.FAILED))
+            else:
+                graph._add_edge(GraphEdge(from_=node_id, to=check_node_id, type=EdgeType.DECIDED))
 
 
 def _find_column_ids(graph: GovernanceGraph, table_key: str, col_name: str) -> list[str]:

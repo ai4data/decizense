@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -41,14 +40,8 @@ pytestmark = pytest.mark.parity
 
 def _normalize_graph_json(data: dict) -> dict:
     """Sort nodes by id, edges by (from, to, type). Strip contract-related items."""
-    nodes = [
-        n for n in data["nodes"]
-        if n["type"] not in CONTRACT_NODE_TYPES
-    ]
-    edges = [
-        e for e in data["edges"]
-        if e["type"] not in CONTRACT_EDGE_TYPES
-    ]
+    nodes = [n for n in data["nodes"] if n["type"] not in CONTRACT_NODE_TYPES]
+    edges = [e for e in data["edges"] if e["type"] not in CONTRACT_EDGE_TYPES]
 
     nodes.sort(key=lambda n: n["id"])
     edges.sort(key=lambda e: (e["from"], e["to"], e["type"]))
@@ -77,9 +70,7 @@ def _ts_compile(project_path: Path) -> dict:
     stderr = result.stderr.decode("utf-8", errors="replace")
     if result.returncode != 0:
         pytest.fail(
-            f"TS dump script failed (exit {result.returncode}):\n"
-            f"stdout: {stdout[:500]}\n"
-            f"stderr: {stderr[:500]}"
+            f"TS dump script failed (exit {result.returncode}):\nstdout: {stdout[:500]}\nstderr: {stderr[:500]}"
         )
     # dotenv may print noise to stdout; find the real JSON (starts with '{\n  "nodes"')
     marker = '"nodes"'
@@ -329,11 +320,7 @@ class TestNodeParity:
 
         # Only compare nodes present in both
         common = set(py_types) & set(ts_types)
-        mismatches = [
-            (nid, py_types[nid], ts_types[nid])
-            for nid in common
-            if py_types[nid] != ts_types[nid]
-        ]
+        mismatches = [(nid, py_types[nid], ts_types[nid]) for nid in common if py_types[nid] != ts_types[nid]]
         assert not mismatches, f"Type mismatches: {mismatches[:10]}"
 
     def test_node_count(self, compiled_graphs: tuple[dict, dict]):
@@ -375,19 +362,16 @@ class TestPropertyParity:
         py_json, ts_json = compiled_graphs
 
         py_pii = {
-            n["id"]
-            for n in py_json["nodes"]
-            if n["type"] == "Column" and n.get("properties", {}).get("is_pii") is True
+            n["id"] for n in py_json["nodes"] if n["type"] == "Column" and n.get("properties", {}).get("is_pii") is True
         }
         ts_pii = {
-            n["id"]
-            for n in ts_json["nodes"]
-            if n["type"] == "Column" and n.get("properties", {}).get("is_pii") is True
+            n["id"] for n in ts_json["nodes"] if n["type"] == "Column" and n.get("properties", {}).get("is_pii") is True
         }
 
         # Only compare columns that exist in both
-        common_cols = {n["id"] for n in py_json["nodes"] if n["type"] == "Column"} & \
-                      {n["id"] for n in ts_json["nodes"] if n["type"] == "Column"}
+        common_cols = {n["id"] for n in py_json["nodes"] if n["type"] == "Column"} & {
+            n["id"] for n in ts_json["nodes"] if n["type"] == "Column"
+        }
         py_pii_common = py_pii & common_cols
         ts_pii_common = ts_pii & common_cols
 
