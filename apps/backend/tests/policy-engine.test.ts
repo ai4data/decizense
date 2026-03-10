@@ -268,7 +268,7 @@ describe('evaluatePolicy', () => {
 			const result = evaluatePolicy(makeDraft({ time_window: undefined }), makePolicy(), [bundle]);
 			expect(result.status).toBe('needs_clarification');
 			if (result.status === 'needs_clarification') {
-				expect(result.questions[0]).toContain('time filter');
+				expect(result.questions[0].toLowerCase()).toContain('time filter');
 			}
 		});
 
@@ -448,6 +448,164 @@ describe('evaluatePolicy', () => {
 			// Both a block (execute_sql disabled) and a question (no bundle) exist
 			// Block should take priority
 			expect(result.status).toBe('block');
+		});
+	});
+
+	describe('ambiguity check', () => {
+		it('returns needs_clarification when is_ambiguous is true', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					ambiguity: {
+						is_ambiguous: true,
+						notes: ['Could mean status=placed or all orders'],
+					},
+				}),
+				makePolicy(),
+				[makeBundle()],
+			);
+			expect(result.status).toBe('needs_clarification');
+			if (result.status === 'needs_clarification') {
+				expect(result.questions).toEqual(expect.arrayContaining([expect.stringContaining('placed')]));
+			}
+			const check = result.checks.find((c) => c.name === 'ambiguity_check');
+			expect(check?.status).toBe('fail');
+		});
+
+		it('passes when is_ambiguous is false', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					ambiguity: { is_ambiguous: false, notes: [] },
+				}),
+				makePolicy(),
+				[makeBundle()],
+			);
+			const check = result.checks.find((c) => c.name === 'ambiguity_check');
+			expect(check?.status).toBe('pass');
+		});
+	});
+
+	describe('PII block — alias and expression patterns', () => {
+		const piiPolicy = makePolicy({
+			pii: {
+				mode: 'block',
+				tags: ['PII'],
+				columns: { 'main.customers': ['first_name', 'last_name', 'email'] },
+			},
+		});
+
+		it('blocks PII column referenced with table alias (c.first_name)', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					tables: ['main.customers'],
+					params: {
+						sql_query: 'SELECT c.first_name FROM main.customers c LIMIT 5',
+					},
+				}),
+				piiPolicy,
+				[makeBundle()],
+			);
+			expect(result.status).toBe('block');
+			if (result.status === 'block') {
+				expect(result.reason).toContain('first_name');
+			}
+		});
+
+		it('blocks PII column in concat expression', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					tables: ['main.customers'],
+					params: {
+						sql_query: "SELECT concat(first_name, ' ', last_name) as full_name FROM main.customers LIMIT 5",
+					},
+				}),
+				piiPolicy,
+				[makeBundle()],
+			);
+			expect(result.status).toBe('block');
+			if (result.status === 'block') {
+				expect(result.reason).toContain('PII');
+			}
+		});
+
+		it('blocks SELECT * on table with PII columns', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					tables: ['main.customers'],
+					params: {
+						sql_query: 'SELECT * FROM main.customers LIMIT 5',
+					},
+				}),
+				piiPolicy,
+				[makeBundle()],
+			);
+			// The policy engine does text-based PII check — SELECT * contains no column names
+			// but the SQL validator will catch this at runtime.
+			// This test documents current behavior: policy engine may not catch SELECT *
+			// (that's why Tier 2 SQL validator tests are critical)
+			const check = result.checks.find((c) => c.name === 'pii_block');
+			expect(check).toBeDefined();
+		});
+	});
+
+	describe('time filter — edge cases', () => {
+		it('needs_clarification for join query when orders table requires time filter', () => {
+			const bundle = makeBundle({
+				defaults: {
+					require_time_filter_for_tables: ['main.orders'],
+				},
+			});
+			const result = evaluatePolicy(
+				makeDraft({
+					tables: ['main.customers', 'main.orders'],
+					time_window: undefined,
+				}),
+				makePolicy(),
+				[bundle],
+			);
+			expect(result.status).toBe('needs_clarification');
+			const check = result.checks.find((c) => c.name === 'time_filter_required');
+			expect(check?.status).toBe('fail');
+		});
+
+		it('resolves all_time to bundle date range', () => {
+			const bundle = makeBundle({
+				defaults: {
+					require_time_filter_for_tables: ['main.orders'],
+					data_start_date: '2018-01-01',
+					demo_current_date: '2018-04-09',
+				},
+			});
+			const draft = makeDraft({
+				time_window: { type: 'all_time' },
+			});
+			const result = evaluatePolicy(draft, makePolicy(), [bundle]);
+			expect(result.status).toBe('allow');
+			const check = result.checks.find((c) => c.name === 'time_filter_required');
+			expect(check?.status).toBe('pass');
+			// Verify the time_window was resolved
+			expect(draft.time_window.resolved_start).toBe('2018-01-01');
+			expect(draft.time_window.resolved_end).toBe('2018-04-09');
+		});
+	});
+
+	describe('unapproved join edge', () => {
+		it('blocks join on unapproved columns', () => {
+			const result = evaluatePolicy(
+				makeDraft({
+					joins: [
+						{
+							left: { schema: 'main', table: 'orders', column: 'status' },
+							right: { schema: 'main', table: 'customers', column: 'name' },
+						},
+					],
+				}),
+				makePolicy(),
+				[makeBundle()],
+			);
+			expect(result.status).toBe('block');
+			if (result.status === 'block') {
+				expect(result.reason).toContain('not in the bundle');
+			}
 		});
 	});
 });

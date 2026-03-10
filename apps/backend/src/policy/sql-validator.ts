@@ -319,6 +319,8 @@ export function validateSqlAgainstContract(sql: string, contract: Contract, poli
 	}
 
 	// ── 5. PII column check ──
+	// Two-pass check: (a) parsed SELECT columns, (b) full SQL text scan for PII names
+	// The text scan catches PII columns in WHERE, CASE, expressions, aliases, etc.
 	if (policy.pii.mode === 'block') {
 		const allPiiColumns = new Set<string>();
 		for (const [, cols] of Object.entries(policy.pii.columns)) {
@@ -327,6 +329,9 @@ export function validateSqlAgainstContract(sql: string, contract: Contract, poli
 			}
 		}
 
+		const piiFound = new Set<string>();
+
+		// (a) Check parsed SELECT columns
 		for (const col of parsed.columns) {
 			if (col === '*') {
 				for (const table of contract.scope.tables) {
@@ -338,7 +343,22 @@ export function validateSqlAgainstContract(sql: string, contract: Contract, poli
 					}
 				}
 			} else if (allPiiColumns.has(col.toLowerCase())) {
+				piiFound.add(col.toLowerCase());
 				violations.push(`Column "${col}" is tagged as PII and blocked by policy.`);
+			}
+		}
+
+		// (b) Full SQL text scan: catch PII columns in WHERE, CASE, functions, etc.
+		const sqlLower = sql.toLowerCase();
+		for (const piiCol of allPiiColumns) {
+			if (piiFound.has(piiCol)) {
+				continue; // Already reported from SELECT column check
+			}
+			// Use word boundary check to avoid false positives (e.g. "email_verified" matching "email")
+			const piiRegex = new RegExp(`\\b${piiCol}\\b`, 'i');
+			if (piiRegex.test(sqlLower)) {
+				piiFound.add(piiCol);
+				violations.push(`Column "${piiCol}" is tagged as PII and blocked by policy (found in SQL text).`);
 			}
 		}
 	}

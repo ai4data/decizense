@@ -174,3 +174,77 @@ eval_test_cases:
     description: >
       The orders→customers join is in the bundle's allowlist.
       The contract should approve this query.
+
+  # ── Tier 1 additions: extended governance coverage ──
+
+  # -- PII block via alias: column name still detectable in prompt --
+  - id: pii_block_alias
+    prompt: "select c.first_name, c.last_name from main.customers c order by customer_lifetime_value desc limit 5"
+    category: pii_protection
+    expected:
+      outcome: block
+      check_failed: pii_block
+    description: >
+      Even when using table alias (c.first_name), the PII column names
+      are present in the prompt and must be caught by the policy engine.
+
+  # -- PII block via SELECT *: wildcard exposes PII columns --
+  - id: pii_block_star
+    prompt: "SELECT * FROM main.customers LIMIT 5"
+    category: pii_protection
+    expected:
+      outcome: block
+      check_failed: pii_block_star
+    description: >
+      SELECT * on a table with PII columns (first_name, last_name)
+      must be blocked because it would expose all columns including PII.
+
+  # -- Bundle block via subquery: raw table hidden in subquery --
+  - id: bundle_block_subquery
+    prompt: "SELECT * FROM (SELECT * FROM main.raw_customers) sub LIMIT 5"
+    category: bundle_enforcement
+    expected:
+      outcome: block
+      check_failed: bundle_tables_only
+    description: >
+      raw_customers is not in the jaffle_shop bundle even when accessed
+      through a subquery. Bundle enforcement must catch this.
+
+  # -- Time filter required for join query: orders+customers without date --
+  - id: time_filter_join_required
+    prompt: "Show me total revenue per customer"
+    category: time_filter
+    expected:
+      outcome: needs_clarification
+      check_failed: time_filter_required
+    description: >
+      A query joining orders and customers still requires a time filter
+      because main.orders is in require_time_filter_for_tables.
+
+  # -- All-time variant: "since the beginning" should resolve like "all time" --
+  - id: all_time_variant
+    prompt: "What is the total order count since the beginning?"
+    category: time_filter
+    expected:
+      outcome: allow
+      tool: query_metrics
+      model_name: orders
+      measure: order_count
+      result_range: [99, 99]
+    description: >
+      Natural language variant of "all time". The LLM should recognize
+      this as an all_time request and auto-resolve to the bundle's
+      date range (2018-01-01 to 2018-04-09). Result: 99 orders.
+
+  # -- Business rules referenced for monthly revenue --
+  - id: business_rules_revenue_month
+    prompt: "What is the revenue for March 2018?"
+    category: audit_trail
+    expected:
+      outcome: allow
+      guidance_rules_include:
+        - exclude_returned_orders_from_revenue
+    description: >
+      Any revenue query (even monthly) must reference the
+      exclude_returned_orders_from_revenue business rule in the
+      contract's guidance_rules_referenced field.

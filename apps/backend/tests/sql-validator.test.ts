@@ -510,4 +510,212 @@ describe('validateSqlAgainstContract', () => {
 			expect((err as SqlValidationError).violations.length).toBeGreaterThanOrEqual(2);
 		}
 	});
+
+	// ── Tier 2: Critical runtime enforcement tests ──
+
+	describe('DDL/DML blocking', () => {
+		it('blocks CREATE TABLE', () => {
+			expect(() =>
+				validateSqlAgainstContract('CREATE TABLE main.hacked (id INT)', makeContract(), makePolicy()),
+			).toThrow(SqlValidationError);
+		});
+
+		it('blocks GRANT', () => {
+			expect(() =>
+				validateSqlAgainstContract('GRANT ALL ON main.orders TO public', makeContract(), makePolicy()),
+			).toThrow(SqlValidationError);
+		});
+	});
+
+	describe('multi-statement attack vectors', () => {
+		it('blocks SELECT followed by DROP', () => {
+			expect(() =>
+				validateSqlAgainstContract(
+					'SELECT id FROM main.orders LIMIT 1; DROP TABLE main.orders;',
+					makeContract(),
+					makePolicy(),
+				),
+			).toThrow(SqlValidationError);
+		});
+
+		it('blocks SELECT followed by INSERT', () => {
+			expect(() =>
+				validateSqlAgainstContract(
+					'SELECT id FROM main.orders LIMIT 1; INSERT INTO main.orders VALUES (999);',
+					makeContract(),
+					makePolicy(),
+				),
+			).toThrow(SqlValidationError);
+		});
+	});
+
+	describe('PII through alias and expression', () => {
+		const piiPolicy = makePolicy({
+			pii: {
+				mode: 'block',
+				tags: ['PII'],
+				columns: { 'main.customers': ['first_name', 'last_name', 'email'] },
+			},
+		});
+
+		it('blocks PII column with table alias', () => {
+			try {
+				validateSqlAgainstContract(
+					'SELECT c.first_name FROM main.customers c LIMIT 10',
+					makeContract(),
+					piiPolicy,
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('first_name')]),
+				);
+			}
+		});
+
+		it('blocks PII column in concat expression', () => {
+			try {
+				validateSqlAgainstContract(
+					"SELECT concat(first_name, ' ', last_name) as full_name FROM main.customers LIMIT 10",
+					makeContract(),
+					piiPolicy,
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('PII')]),
+				);
+			}
+		});
+
+		it('blocks PII column in CASE WHEN expression', () => {
+			try {
+				validateSqlAgainstContract(
+					"SELECT CASE WHEN email LIKE '%@gmail%' THEN 'gmail' ELSE 'other' END FROM main.customers LIMIT 10",
+					makeContract(),
+					piiPolicy,
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('email')]),
+				);
+			}
+		});
+
+		it('blocks PII column used in WHERE clause', () => {
+			try {
+				validateSqlAgainstContract(
+					"SELECT id FROM main.customers WHERE first_name = 'Alice' LIMIT 10",
+					makeContract(),
+					piiPolicy,
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('first_name')]),
+				);
+			}
+		});
+	});
+
+	describe('subquery with out-of-scope table', () => {
+		it('blocks raw table hidden in subquery', () => {
+			try {
+				validateSqlAgainstContract(
+					'SELECT * FROM (SELECT * FROM main.raw_customers) sub LIMIT 10',
+					makeContract(),
+					makePolicy(),
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('raw_customers')]),
+				);
+			}
+		});
+
+		it('blocks raw table in CTE (caught as out-of-scope table)', () => {
+			// The regex parser extracts tables from FROM/JOIN clauses including inside CTEs,
+			// so raw_customers should be detected. If the parser sees "cte" as the table
+			// instead, the CTE alias is also out of scope, so the query is still blocked.
+			try {
+				validateSqlAgainstContract(
+					'WITH cte AS (SELECT * FROM main.raw_customers) SELECT * FROM cte LIMIT 10',
+					makeContract(),
+					makePolicy(),
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				// Either raw_customers or cte will be flagged as out-of-scope
+				const violations = (err as SqlValidationError).violations;
+				const hasTableViolation = violations.some((v) => v.includes('raw_customers') || v.includes('cte'));
+				expect(hasTableViolation).toBe(true);
+			}
+		});
+	});
+
+	describe('time window validation', () => {
+		it('blocks SQL without time column when time_columns is set', () => {
+			const contract = makeContract({
+				scope: {
+					dataset_bundles: ['jaffle_shop'],
+					tables: ['main.orders'],
+					time_window: { type: 'custom', resolved_start: '2018-01-01', resolved_end: '2018-04-09' },
+					time_columns: { 'main.orders': 'order_date' },
+				},
+			});
+			try {
+				validateSqlAgainstContract(
+					"SELECT id FROM main.orders WHERE status = 'placed' LIMIT 10",
+					contract,
+					makePolicy(),
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('order_date')]),
+				);
+			}
+		});
+	});
+
+	describe('JOIN edge allowlist — unapproved edges', () => {
+		it('blocks JOIN on unapproved columns even if tables are in scope', () => {
+			const contract = makeContract({
+				scope: {
+					dataset_bundles: ['jaffle_shop'],
+					tables: ['main.customers', 'main.orders'],
+					approved_joins: [
+						{
+							left_table: 'main.orders',
+							left_column: 'customer_id',
+							right_table: 'main.customers',
+							right_column: 'id',
+						},
+					],
+				},
+			});
+			try {
+				validateSqlAgainstContract(
+					'SELECT o.id FROM main.orders o JOIN main.customers c ON o.amount = c.customer_lifetime_value LIMIT 10',
+					contract,
+					makePolicy(),
+				);
+				expect.unreachable('Should have thrown');
+			} catch (err) {
+				expect(err).toBeInstanceOf(SqlValidationError);
+				expect((err as SqlValidationError).violations).toEqual(
+					expect.arrayContaining([expect.stringContaining('approved join allowlist')]),
+				);
+			}
+		});
+	});
 });

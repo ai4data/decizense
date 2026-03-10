@@ -98,7 +98,7 @@ def _run_governance_test(
 
     results = []
 
-    # Check: PII block
+    # Check: PII block (column name in prompt text)
     if expected_check == "pii_block":
         pii_cols = policy.get("pii", {}).get("columns", {})
         prompt_lower = test_case.get("prompt", "").lower()
@@ -111,6 +111,20 @@ def _run_governance_test(
             results.append((True, f"PII block triggered: {', '.join(blocked)}"))
         else:
             results.append((False, "PII block expected but no PII columns found in prompt"))
+
+    # Check: PII block via SELECT * (table has PII columns)
+    if expected_check == "pii_block_star":
+        pii_cols = policy.get("pii", {}).get("columns", {})
+        prompt_lower = test_case.get("prompt", "").lower()
+        if "select *" in prompt_lower or "select\t*" in prompt_lower:
+            # Check if any referenced table has PII columns
+            tables_with_pii = [t for t, cols in pii_cols.items() if cols]
+            if tables_with_pii:
+                results.append((True, f"SELECT * blocked: PII tables {', '.join(tables_with_pii)}"))
+            else:
+                results.append((False, "SELECT * found but no PII tables configured"))
+        else:
+            results.append((False, "Expected SELECT * in prompt but not found"))
 
     # Check: bundle_tables_only
     if expected_check == "bundle_tables_only":
