@@ -2,7 +2,9 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import s, { DBOrganization, DBOrgMember, NewOrganization, NewOrgMember } from '../db/abstractSchema';
 import { db } from '../db/db';
+import { env } from '../env';
 import { OrgRole } from '../types/organization';
+import * as projectQueries from './project.queries';
 import * as userQueries from './user.queries';
 
 export const getOrganizationById = async (id: string): Promise<DBOrganization | null> => {
@@ -161,4 +163,34 @@ export const ensureOrganizationSetup = async (): Promise<void> => {
 
 	// Assign any orphaned projects (projects without org) to the default org
 	await db.update(s.project).set({ orgId: org.id }).where(isNull(s.project.orgId)).execute();
+
+	// Ensure project exists for DAZENSE_DEFAULT_PROJECT_PATH
+	const projectPath = env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (projectPath) {
+		const existingProject = await projectQueries.getProjectByPath(projectPath);
+		if (!existingProject) {
+			const projectName = projectPath.split('/').pop() || 'Default Project';
+			const project = await projectQueries.createProject({
+				name: projectName,
+				type: 'local',
+				path: projectPath,
+				orgId: org.id,
+			});
+			await projectQueries.addProjectMember({
+				projectId: project.id,
+				userId: firstUser.id,
+				role: 'admin',
+			});
+		} else {
+			// Ensure the first user is a member of the project
+			const member = await projectQueries.getProjectMember(existingProject.id, firstUser.id);
+			if (!member) {
+				await projectQueries.addProjectMember({
+					projectId: existingProject.id,
+					userId: firstUser.id,
+					role: 'admin',
+				});
+			}
+		}
+	}
 };

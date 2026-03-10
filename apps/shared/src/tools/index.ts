@@ -1,3 +1,4 @@
+export * as buildContract from './build-contract';
 export * as classify from './classify';
 export * as displayChart from './display-chart';
 export * as executePython from './execute-python';

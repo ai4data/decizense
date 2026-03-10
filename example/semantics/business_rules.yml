@@ -1,14 +1,145 @@
 rules:
-  - name: cancelled_orders_excluded
+  # ── Revenue & financial metrics ──
+
+  - name: exclude_returned_orders_from_revenue
     category: metrics
     severity: critical
-    applies_to: [orders.total_amount, orders.avg_order_value]
-    description: Revenue metrics should exclude cancelled orders
-    guidance: Always filter status != 'cancelled' when computing revenue
+    applies_to: [orders.total_revenue, orders.avg_order_value, orders.credit_card_revenue, orders.coupon_revenue, orders.bank_transfer_revenue, orders.gift_card_revenue]
+    description: Revenue metrics must exclude returned and return_pending orders.
+    guidance: >
+      Always add WHERE status NOT IN ('returned', 'return_pending') when computing
+      revenue, average order value, or payment method breakdowns. Only 'completed',
+      'shipped', and 'placed' orders represent real revenue.
 
-  - name: test_customers
+  - name: order_amount_equals_payment_sum
     category: data_quality
+    severity: critical
+    applies_to: [orders]
+    description: "Order amount must equal the sum of its payment method amounts: credit_card_amount + coupon_amount + bank_transfer_amount + gift_card_amount = amount."
+    guidance: >
+      If you see a discrepancy between the order amount and the sum of payment
+      columns, flag it as a data quality issue. Do not attempt to reconcile manually.
+
+  - name: net_revenue_definition
+    category: metrics
+    severity: warning
+    applies_to: [orders.total_revenue]
+    description: >
+      "Net revenue" means total_revenue minus returned orders. "Gross revenue"
+      includes all orders regardless of status.
+    guidance: >
+      When the user asks for "revenue" without qualification, default to net revenue
+      (exclude returned/return_pending). Only use gross revenue when explicitly asked.
+
+  # ── Customer analytics ──
+
+  - name: customer_type_classification
+    category: metrics
     severity: warning
     applies_to: [customers]
-    description: Test customers exist in the data with IDs > 100
-    guidance: Filter out customer_id > 100 for production analysis
+    description: >
+      Customers are classified as "new" (1 order) or "returning" (2+ orders).
+      Use number_of_orders to determine this.
+    guidance: >
+      When segmenting customers, use: CASE WHEN number_of_orders > 1 THEN 'returning'
+      ELSE 'new' END. 71% of customers in this dataset are new, 29% are returning.
+
+  - name: lifetime_value_consistency
+    category: data_quality
+    severity: critical
+    applies_to: [customers.total_lifetime_value, customers.avg_lifetime_value]
+    description: >
+      customer_lifetime_value should equal the sum of order amounts for that customer.
+      Cross-check when presenting LTV alongside order-level totals.
+    guidance: >
+      If a user asks for both customer LTV and order-level revenue, ensure the totals
+      are consistent. Use the customers table for per-customer LTV and orders for
+      order-level breakdowns.
+
+  # ── PII & privacy ──
+
+  - name: pii_customer_names
+    category: privacy
+    severity: critical
+    applies_to: [customers.first_name, customers.last_name]
+    description: first_name and last_name are personally identifiable information (PII).
+    guidance: >
+      Never include first_name or last_name in query results unless the user explicitly
+      requests individual customer records. For aggregate analysis, group by customer_id
+      or customer segments instead. The policy engine will block these columns in
+      strict mode.
+
+  # ── Time filters ──
+
+  - name: orders_require_time_filter
+    category: query_patterns
+    severity: warning
+    applies_to: [orders]
+    description: >
+      The orders table is a fact table spanning 2018-01-01 to 2018-04-09. Always
+      apply a time filter on order_date for bounded queries.
+    guidance: >
+      When a user asks about "recent" or "last month" orders, translate to an explicit
+      date range on order_date. The policy engine enforces this in strict mode.
+
+  # ── Payment method analysis ──
+
+  - name: payment_method_breakdown
+    category: query_patterns
+    severity: info
+    applies_to: [orders, payments]
+    description: >
+      Payment data exists at two granularities: (1) orders table has pre-aggregated
+      payment columns (credit_card_amount, coupon_amount, etc.), (2) stg_payments
+      has individual payment rows with payment_method dimension.
+    guidance: >
+      For payment method breakdown by order, use the orders table columns directly
+      (faster, one row per order). For transaction-level analysis or counting
+      payment transactions, use the stg_payments table joined to orders.
+
+  - name: split_payments
+    category: data_quality
+    severity: info
+    applies_to: [payments]
+    description: >
+      Some orders have split payments across multiple methods. There are 113 payment
+      transactions for 99 orders, meaning ~14 orders have split payments.
+    guidance: >
+      When counting "orders paid by credit card", use orders WHERE credit_card_amount > 0
+      rather than counting distinct order_ids in stg_payments, as an order can use
+      multiple payment methods.
+
+  # ── Status-based analysis ──
+
+  - name: order_status_definitions
+    category: domain
+    severity: info
+    applies_to: [orders]
+    description: >
+      Order statuses and their meanings: placed (order received, not yet shipped),
+      shipped (in transit), completed (delivered), returned (customer returned the
+      order), return_pending (return requested, not yet processed).
+    guidance: >
+      For fulfillment analysis: active pipeline = placed + shipped. Completed = successfully
+      delivered. Problem orders = returned + return_pending. Completion rate =
+      completed / (completed + returned + return_pending).
+
+classifications:
+  - name: PII
+    description: Personally identifiable information — names, emails, phone numbers
+    columns:
+      - customers.first_name
+      - customers.last_name
+    tags: [sensitive, restricted]
+
+  - name: Financial
+    description: Monetary values that require careful aggregation
+    columns:
+      - orders.amount
+      - orders.credit_card_amount
+      - orders.coupon_amount
+      - orders.bank_transfer_amount
+      - orders.gift_card_amount
+      - customers.customer_lifetime_value
+      - payments.amount
+    tags: [financial]

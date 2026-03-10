@@ -1,3 +1,9 @@
+import {
+	type DatasetBundle,
+	DatasetBundleSchema,
+	type PolicyConfig,
+	PolicySchema,
+} from '@dazense/shared/tools/build-contract';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import YAML from 'yaml';
@@ -127,6 +133,7 @@ export type BusinessRuleInfo = {
 	name: string;
 	category: string;
 	severity: string;
+	applies_to: string[];
 	description: string;
 	guidance: string;
 };
@@ -153,6 +160,7 @@ export function getBusinessRules(): BusinessRuleInfo[] | null {
 			name: rule.name,
 			category: rule.category,
 			severity: rule.severity || 'info',
+			applies_to: ((rule as Record<string, unknown>).applies_to as string[]) ?? [],
 			description: rule.description,
 			guidance: rule.guidance,
 		}));
@@ -193,6 +201,87 @@ export function getClassifications(): ClassificationInfo[] | null {
 		}));
 	} catch (error) {
 		console.error('Error reading classifications from business_rules.yml:', error);
+		return null;
+	}
+}
+
+// ── Trusted Analytics Copilot loaders ──
+
+export { type DatasetBundle, type PolicyConfig };
+
+/**
+ * Loads and validates all dataset bundles from datasets/<bundle_id>/dataset.yaml
+ */
+export function getDatasetBundles(projectFolder?: string): DatasetBundle[] | null {
+	const folder = projectFolder ?? env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!folder) {
+		return null;
+	}
+
+	const datasetsPath = join(folder, 'datasets');
+	if (!existsSync(datasetsPath)) {
+		return null;
+	}
+
+	try {
+		const entries = readdirSync(datasetsPath, { withFileTypes: true });
+		const bundles: DatasetBundle[] = [];
+
+		for (const entry of entries) {
+			if (!entry.isDirectory()) {
+				continue;
+			}
+
+			const yamlPath = join(datasetsPath, entry.name, 'dataset.yaml');
+			if (!existsSync(yamlPath)) {
+				continue;
+			}
+
+			const content = readFileSync(yamlPath, 'utf-8');
+			const raw = YAML.parse(content);
+			const parsed = DatasetBundleSchema.safeParse(raw);
+
+			if (parsed.success) {
+				bundles.push(parsed.data);
+			} else {
+				console.error(`Invalid dataset bundle ${entry.name}/dataset.yaml:`, parsed.error.issues);
+			}
+		}
+
+		return bundles.length > 0 ? bundles : null;
+	} catch (error) {
+		console.error('Error reading dataset bundles:', error);
+		return null;
+	}
+}
+
+/**
+ * Loads and validates the policy file from policies/policy.yml
+ */
+export function getPolicies(projectFolder?: string): PolicyConfig | null {
+	const folder = projectFolder ?? env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!folder) {
+		return null;
+	}
+
+	const policyPath = join(folder, 'policies', 'policy.yml');
+	if (!existsSync(policyPath)) {
+		return null;
+	}
+
+	try {
+		const content = readFileSync(policyPath, 'utf-8');
+		const raw = YAML.parse(content);
+		const parsed = PolicySchema.safeParse(raw);
+
+		if (parsed.success) {
+			return parsed.data;
+		}
+
+		console.error('Invalid policies/policy.yml:', parsed.error.issues);
+		return null;
+	} catch (error) {
+		console.error('Error reading policies/policy.yml:', error);
 		return null;
 	}
 }

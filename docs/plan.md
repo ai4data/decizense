@@ -30,159 +30,62 @@ Integrate a **semantic layer** (consistent metric definitions) and **business ru
 
 ---
 
-## Plan
+## Terminology (vNext)
 
-### Phase 1: Semantic Layer
+To avoid confusion, we use these names:
 
-**Goal:** Users define metrics and dimensions in YAML. The agent calls `query_metrics()` instead of writing raw SQL for known metrics.
+- `semantics/semantic_model.yml` = **Metrics** (machine-executable “semantic API” via `query_metrics`)
+- `semantics/business_rules.yml` = **Guidance** (definitions, caveats, interpretation notes for humans + agent)
+- `datasets/**/dataset.yaml` = **Dataset Bundles** (data products: tables + allowed joins + use-cases)
+- `policies/**/*.yml` = **Enforcement** (machine rules: PII/RBAC/limits/certification requirements)
+- `contracts/runs/*.json` = **Execution Contracts** (generated per question; validated before any execution)
 
-**What to build:**
+Important: “semantic contract” is not a YAML file. The contract is the per-run artifact (`contracts/runs/*.json`).
 
-1. **YAML-to-Ibis translator** (~300-500 lines of Python)
-    - Location: `cli/dazense_core/semantic/` (new module)
-    - Parses a `semantic_model.yml` file from the project folder
-    - Resolves table references, joins, and aggregations
-    - Translates metric queries into Ibis expressions
-    - Ibis compiles to the target SQL dialect (DuckDB, Postgres, BigQuery, Snowflake, etc.)
-    - No external dependency — Ibis is already in dazense's stack
+---
 
-2. **New FastAPI endpoint** (`/query_metrics`)
-    - Location: `apps/backend/fastapi/main.py` (extend existing)
-    - Accepts: `{ measures: [...], dimensions: [...], filters: {...}, limit: N }`
-    - Loads semantic model from project folder
-    - Executes via the Ibis translator
-    - Returns: `{ data: [...], columns: [...], row_count: N }`
+## Roadmap (Trusted Analytics Copilot)
 
-3. **New agent tool** (`query-metrics.ts`)
-    - Location: `apps/backend/src/agents/tools/query-metrics.ts`
-    - Same HTTP pattern as `execute-sql.ts` — calls FastAPI endpoint
-    - Input schema exposes available measures and dimensions
+### Phase 1 — Trust Layer (the “killer feature”) ✅ IMPLEMENTED
 
-4. **System prompt updates**
-    - Location: `apps/backend/src/components/system-prompt.tsx`
-    - Inject available metrics/dimensions from the semantic model
-    - Instruct agent: prefer `query_metrics` for defined metrics, fall back to `execute_sql` for ad-hoc queries
+> **Status:** All Phase 1 components are implemented and tested. See `docs/trusted-analytics-copilot-implementation_plan.md` for the full technical spec and `docs/TESTING_V1.md` for a hands-on tutorial.
 
-5. **CLI awareness**
-    - `dazense sync` validates the semantic model if present
-    - `dazense init` optionally scaffolds a starter `semantic_model.yml`
+Goal: every answer is defined, safe, reproducible, and auditable.
 
-**Semantic model format** (per project):
+What we added on top of existing Metrics + Guidance:
 
-```yaml
-# semantic_model.yml
-models:
-    orders:
-        table: orders
-        time_dimension: order_date
-        dimensions:
-            status: _.status
-            customer_id: _.customer_id
-        measures:
-            order_count: _.count()
-            total_amount: _.amount.sum()
-            avg_amount: _.amount.mean()
-        joins:
-            customer:
-                model: customers
-                type: one
-                with: _.customer_id
+1. **Execution Contract (Resolution step)** ✅
+    - Agent calls `build_contract` tool before running `execute_sql` or `query_metrics`.
+    - Contract references metric IDs, guidance rules, approved tables, joins, and time columns.
+    - Contracts are persisted as JSON in `contracts/runs/` for audit.
 
-    customers:
-        table: customers
-        primary_key: customer_id
-        dimensions:
-            customer_id: _.customer_id
-            first_name: _.first_name
-            last_name: _.last_name
-```
+2. **Policy Gate (Enforcement step)** ✅
+    - Policy engine enforces PII blocking, join allowlists, required time filters, row limits.
+    - SQL validator parses actual SQL at execution time (fail-closed: parse failure = block).
+    - Three-state response: allow (with contract_id), block (with reason + fixes), or needs_clarification (with questions).
 
-**Key design decisions:**
+3. **Dataset Bundles** ✅
+    - `datasets/<bundle_id>/dataset.yaml` defines table allowlists + approved join edges.
+    - JOIN ON conditions validated against approved edges (bidirectional matching).
+    - Example: jaffle_shop bundle with 3 tables, 2 approved joins, time filter enforcement.
 
-- Semantic model is **optional** — projects without it work exactly as today
-- Agent uses both tools — `query_metrics` for governed metrics, `execute_sql` for exploration
-- Ibis handles dialect translation — one YAML works across all supported databases
-- No boring-semantic-layer dependency — owned code, full control
+4. **Provenance** ✅
+    - Tool outputs include contract_id, bundle, tables, and safety checks passed.
+    - Full contract JSON available in `contracts/runs/` for inspection.
 
-### Phase 2: Business Rules Engine
+### Phase 2 — OpenMetadata Integration (input)
 
-**Goal:** Attach business context, caveats, and classification logic to data concepts so the agent provides insight, not just numbers.
+Goal: enterprise governance signals flow into dazense enforcement.
 
-**What to build:**
+- Ingest OpenMetadata into a local snapshot cache (PII tags, owners, glossary, certification, quality).
+- Policy gate uses these signals (still enforced inside dazense).
 
-1. **Business rules YAML format**
-    - Location: `business_rules.yml` in the project folder (or a section in `semantic_model.yml`)
-    - Defines: rules, caveats, classifications, interpretation guidance
+### Phase 3 — Dataset Discovery / Recommendation (optional tool)
 
-2. **New FastAPI endpoint** (`/get_business_context`)
-    - Accepts: `{ concept: "tips", context: "cash_payments" }`
-    - Returns relevant rules, caveats, and guidance
+Goal: help users pick the right dataset bundle when they don’t know it.
 
-3. **New agent tool** (`get-business-context.ts`)
-    - Agent calls this when interpreting results or answering "why" questions
-
-4. **System prompt injection**
-    - Critical rules injected directly into the system prompt
-    - Less critical rules available via tool call
-
-**Business rules format:**
-
-```yaml
-# business_rules.yml
-rules:
-    - name: cash_tips_not_recorded
-      applies_to: [tip_amount, tips]
-      severity: critical
-      description: Cash tips are NOT recorded in the data
-      guidance: Exclude cash payments from any tip analysis
-
-    - name: jfk_flat_rate
-      applies_to: [fare_amount, airport]
-      severity: info
-      description: JFK airport uses a flat $52 rate
-      guidance: Do not compare JFK fares with metered trips
-
-classifications:
-    trip_type:
-        airport:
-            rule: "rate_code IN (2, 3) OR zone_type = 'Airport'"
-            characteristics:
-                expected_tip_rate: '15-20%'
-        commute:
-            rule: 'weekday AND hour BETWEEN 7 AND 9'
-            characteristics:
-                recurring: true
-```
-
-**Key design decisions:**
-
-- Start simple — YAML rules, no RDF/SPARQL, no rdflib
-- Critical rules go in system prompt (always visible to agent)
-- Detailed rules available via tool (on-demand)
-- Complements RULES.md — structured rules for the engine, free-form rules for human instructions
-
-### Phase 3: Hosted Cloud
-
-**Goal:** Deploy dazense as a hosted service. Users sign up, connect a database, define metrics, and chat.
-
-**What to build:**
-
-1. **Multi-tenant infrastructure** — isolated projects per team/org
-2. **Onboarding flow** — connect database, auto-discover schema, suggest metrics
-3. **Billing** — per-seat pricing ($20-50/seat/month)
-4. **Admin dashboard** — usage analytics, cost tracking, user management
-
-**This phase is product/infra work, not covered in the architecture document.**
-
-### Phase 4: Enterprise Features (Paid Tier)
-
-- SSO (SAML/OIDC)
-- Audit logs
-- Role-based access to metrics and databases
-- Scheduled reports and alerts
-- Slack/Teams integration (already partially built)
-- On-premise deployment support
-- SLA and priority support
+- Agent recommends 1–3 bundles based on OpenMetadata glossary + bundle use-cases.
+- User confirms selection; then normal contract → policy → execute.
 
 ---
 

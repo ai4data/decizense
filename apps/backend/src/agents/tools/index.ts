@@ -4,6 +4,7 @@ import { join } from 'path';
 import { env } from '../../env';
 import { mcpService } from '../../services/mcp.service';
 import { AgentSettings } from '../../types/agent-settings';
+import buildContract from './build-contract';
 import classify from './classify';
 import displayChart from './display-chart';
 import executePython, { isPythonAvailable } from './execute-python';
@@ -24,6 +25,11 @@ function hasSemanticModel(): boolean {
 function hasBusinessRules(): boolean {
 	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
 	return !!projectFolder && existsSync(join(projectFolder, 'semantics', 'business_rules.yml'));
+}
+
+function hasPolicies(): boolean {
+	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
+	return !!projectFolder && existsSync(join(projectFolder, 'policies', 'policy.yml'));
 }
 
 export const tools = {
@@ -51,5 +57,6 @@ export const getTools = (agentSettings: AgentSettings | null) => {
 		...(hasSemanticModel() && { query_metrics: queryMetrics }),
 		...(hasBusinessRules() && { get_business_context: getBusinessContext }),
 		...(hasBusinessRules() && { classify }),
+		...(hasPolicies() && { build_contract: buildContract }),
 	};
 };

@@ -1,5 +1,7 @@
 # Tutorial: Semantic Layer & Business Rules in dazense
 
+> **Note:** This tutorial covers the semantic layer and business rules. For the enforcement layer (contracts, policy engine, gated execution), see `docs/TESTING_V1.md`.
+
 This tutorial walks you through dazense from scratch — setting up a project, syncing a database, then adding the semantic layer and business rules on top.
 
 ## Prerequisites
@@ -49,7 +51,11 @@ my-project/
 ├── .dazenseignore       # Files to exclude from sync
 ├── databases/           # Synced database metadata (populated by dazense sync)
 ├── docs/                # Documentation files
-├── semantics/           # Semantic layer + business rules (we'll add these)
+├── semantics/           # Metrics + Guidance (semantic_model.yml + business_rules.yml)
+├── datasets/            # Dataset Bundles (data products)
+├── policies/            # Enforcement rules (PII/RBAC/limits/etc.)
+├── contracts/runs/      # Generated Execution Contracts (audit/provenance)
+├── openmetadata/        # OpenMetadata snapshot cache (optional)
 ├── queries/             # Saved queries
 ├── repos/               # Synced git repos
 ├── agent/tools/         # Custom agent tools
@@ -271,11 +277,13 @@ dazense chat
 
 The example project includes:
 
-- A DuckDB database (`jaffle_shop.duckdb`) with customers, orders, and payments
+- A DuckDB database (`jaffle_shop.duckdb`) with 8 tables (100 customers, 99 orders, 113 payments)
 - Pre-synced database metadata in `databases/`
 - A `RULES.md` with basic business context
-- A `semantics/semantic_model.yml` defining customers and orders models
-- A `semantics/business_rules.yml` with sample rules
+- A `semantics/semantic_model.yml` with 3 models (customers, orders, payments), 18 measures, 12 dimensions, and 3 joins
+- A `semantics/business_rules.yml` with 10 rules + 2 data classifications (PII, Financial)
+- A `datasets/jaffle_shop/dataset.yaml` defining a dataset bundle with 3 tables and 2 approved joins
+- A `policies/policy.yml` for enforcement (PII blocking, join allowlists, time filters, row limits)
 
 Try these questions:
 
@@ -319,6 +327,37 @@ User asks a question
 ```
 
 The semantic layer is optional at every level. If you remove the YAML files, the tools disappear and the agent goes back to writing raw SQL — no configuration changes needed.
+
+### With Contract Enforcement (V1)
+
+When `policies/policy.yml` exists and `require_contract: true` is set, the flow adds a mandatory contract step:
+
+```
+User asks a question
+        |
+        v
+   Agent decides what to query
+        |
+        v
+   build_contract (policy engine evaluates)
+        |
+        ├── allow  → contract_id returned
+        │     |
+        │     v
+        │   query_metrics / execute_sql (with contract_id)
+        │     |
+        │     v
+        │   SQL validated against contract + policy
+        │     |
+        │     v
+        │   Results with provenance (contract_id, tables, checks)
+        │
+        ├── block  → reason + fixes returned to user
+        │
+        └── needs_clarification → questions returned to user
+```
+
+This ensures PII is blocked, joins follow the approved allowlist, time filters are enforced, and row limits are respected. See `docs/TESTING_V1.md` for a hands-on walkthrough.
 
 ---
 

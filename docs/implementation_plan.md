@@ -1,5 +1,9 @@
 # Plan: Add Semantic Layer + Business Rules to dazense
 
+> **Status note:** The semantic layer (`semantic_model.yml` + `query_metrics`) and guidance rules (`business_rules.yml`) are implemented in dazense.
+> The V1 Trusted Analytics Copilot (enforcement layer) is also implemented: contracts, policy engine, SQL validator, `build_contract` tool, gated execution, `dazense validate` CLI, and provenance. See `docs/trusted-analytics-copilot-implementation_plan.md` for the full spec and `docs/TESTING_V1.md` for a testing tutorial.
+> This document is kept for historical context. The current roadmap lives in `docs/plan.md` under “Roadmap (Trusted Analytics Copilot)”.
+
 ## Context
 
 dazense's agent currently writes **raw SQL from scratch every time** — it reads schema markdown, infers joins, and generates queries. This causes inconsistent answers, wrong joins, and no metric governance. We're adding two features from the datazense project:

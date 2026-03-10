@@ -6,6 +6,28 @@ import { truncateMiddle } from '../../utils/utils';
 
 const MAX_ROWS = 20;
 
+const ProvenanceSection = ({ provenance }: { provenance: queryMetrics.Output['provenance'] }) => {
+	if (!provenance) {
+		return null;
+	}
+	return (
+		<Block>
+			<Title level={2}>Provenance</Title>
+			<Span>Contract: {provenance.contract_id}</Span>
+			{provenance.bundle_id && <Span>Bundle: {provenance.bundle_id}</Span>}
+			<Span>Tables: {provenance.tables.join(', ')}</Span>
+			<TitledList title='Safety Checks'>
+				{provenance.checks.map((check) => (
+					<ListItem>
+						[{check.status}] {check.name}
+						{check.detail ? ` — ${check.detail}` : ''}
+					</ListItem>
+				))}
+			</TitledList>
+		</Block>
+	);
+};
+
 export const QueryMetricsOutput = ({
 	output,
 	maxRows = MAX_ROWS,
@@ -14,6 +36,14 @@ export const QueryMetricsOutput = ({
 	maxRows?: number;
 }) => {
 	if (output.data.length === 0) {
+		if (output.provenance) {
+			return (
+				<Block>
+					<Span>The metric query was successfully executed and returned no rows.</Span>
+					<ProvenanceSection provenance={output.provenance} />
+				</Block>
+			);
+		}
 		return <Block>The metric query was successfully executed and returned no rows.</Block>;
 	}
 
@@ -50,6 +80,8 @@ export const QueryMetricsOutput = ({
 			</Block>
 
 			{remainingRows > 0 && <Span>...({remainingRows} more)</Span>}
+
+			{output.provenance && <ProvenanceSection provenance={output.provenance} />}
 		</Block>
 	);
 };

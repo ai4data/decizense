@@ -25,10 +25,17 @@ class Dimension(BaseModel):
     description: str | None = None
 
 
+class MeasureFilter(BaseModel):
+    column: str
+    operator: str = "eq"
+    value: str | int | float | bool | list | None = None
+
+
 class Measure(BaseModel):
     type: AggregationType
     column: str | None = None
     description: str | None = None
+    filters: list[MeasureFilter] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_column_required(self) -> "Measure":

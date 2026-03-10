@@ -2,6 +2,8 @@ import {
 	getBusinessRules,
 	getClassifications,
 	getConnections,
+	getDatasetBundles,
+	getPolicies,
 	getSemanticModels,
 	getUserRules,
 } from '../agents/user-rules';
@@ -13,6 +15,8 @@ export function SystemPrompt() {
 	const semanticModels = getSemanticModels();
 	const businessRules = getBusinessRules();
 	const classifications = getClassifications();
+	const policies = getPolicies();
+	const bundles = getDatasetBundles();
 
 	return (
 		<Block>
@@ -159,6 +163,84 @@ export function SystemPrompt() {
 							<ListItem>
 								<Bold>{classification.name}</Bold>: {classification.description}
 								{classification.tags.length > 0 && ` (tags: ${classification.tags.join(', ')})`}
+							</ListItem>
+						))}
+					</List>
+				</Block>
+			)}
+			{policies && (
+				<Block>
+					<Title level={2}>Trusted Execution Rules</Title>
+					<Span>A governance policy is active. You must follow these rules strictly:</Span>
+					<List>
+						<ListItem>
+							Always call <Bold>build_contract</Bold> before calling execute_sql or query_metrics. Never
+							skip the contract step.
+						</ListItem>
+						<ListItem>
+							Work within dataset bundles. Only use tables and joins listed in the active bundle.
+						</ListItem>
+						<ListItem>
+							PII columns are blocked. Do not SELECT them. If a user asks for PII data, explain that it is
+							blocked by policy.
+						</ListItem>
+						<ListItem>
+							<Bold>Ambiguity assessment is mandatory.</Bold> Before calling build_contract, assess
+							whether the user's question could have multiple interpretations. Common ambiguities include:
+							a word matching both a status value and a general concept (e.g., "placed" could mean
+							status='placed' or all orders created), metric names that could refer to different
+							calculations (e.g., "revenue" could mean gross or net), or missing context like time
+							periods. Set the <Bold>ambiguity</Bold> field in build_contract with is_ambiguous=true and
+							describe each interpretation in the notes array. The policy engine will return
+							needs_clarification so you can ask the user to disambiguate BEFORE executing. Do not guess —
+							ask.
+						</ListItem>
+						<ListItem>
+							If build_contract returns block or needs_clarification, relay the feedback to the user. Do
+							not retry with the same parameters.
+						</ListItem>
+						<ListItem>Include the contract_id in your execute_sql or query_metrics call.</ListItem>
+						<ListItem>
+							When a time filter is required, always resolve relative time references (e.g. "last 30
+							days", "last month", "year to date") into concrete ISO dates (e.g. "2026-02-07") before
+							passing them as filter values. The database cannot compare date columns to strings like
+							"last_30_days". If the user asks for "all time" or the full dataset, use time_window type
+							"all_time" — the policy engine will auto-resolve it to the bundle's date range. Do NOT ask
+							the user for dates when they clearly want all available data.
+							{bundles?.some((b) => (b.defaults as Record<string, unknown>)?.demo_current_date)
+								? ` IMPORTANT: This dataset uses demo data. For all date calculations, treat "${(bundles.find((b) => (b.defaults as Record<string, unknown>)?.demo_current_date)?.defaults as Record<string, unknown>)?.demo_current_date}" as today's date (not the real current date). For example, "last 30 days" means 30 days before that date.${(bundles.find((b) => (b.defaults as Record<string, unknown>)?.data_start_date)?.defaults as Record<string, unknown>)?.data_start_date ? ` Data starts from ${(bundles.find((b) => (b.defaults as Record<string, unknown>)?.data_start_date)?.defaults as Record<string, unknown>)?.data_start_date}.` : ''}`
+								: "Use today's date to compute the range."}{' '}
+							Example: for "last 30 days", use operator "gte" with value set to the actual date 30 days
+							ago (YYYY-MM-DD format).
+						</ListItem>
+					</List>
+					{policies.pii.mode === 'block' && Object.keys(policies.pii.columns).length > 0 && (
+						<Block>
+							<Title level={3}>Blocked PII Columns</Title>
+							<List>
+								{Object.entries(policies.pii.columns).map(([table, cols]) => (
+									<ListItem>
+										{table}: {cols.join(', ')}
+									</ListItem>
+								))}
+							</List>
+						</Block>
+					)}
+				</Block>
+			)}
+			{bundles && (
+				<Block>
+					<Title level={2}>Available Dataset Bundles</Title>
+					<Span>The following curated dataset bundles are available. Use these to scope your queries.</Span>
+					<List>
+						{bundles.map((bundle) => (
+							<ListItem>
+								<Bold>{bundle.bundle_id}</Bold>
+								{bundle.display_name && ` — ${bundle.display_name}`}
+								{'\n'}Tables: {bundle.tables.map((t) => `${t.schema}.${t.table}`).join(', ')}
+								{bundle.joins.length > 0 &&
+									`\nJoins: ${bundle.joins.map((j) => `${j.left.table}.${j.left.column} → ${j.right.table}.${j.right.column}`).join(', ')}`}
+								{bundle.certification && `\nCertification: ${bundle.certification.level}`}
 							</ListItem>
 						))}
 					</List>
