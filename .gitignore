@@ -17,4 +17,4 @@ dazense-chat-server*
 *.pyc
 
 rsa_key.*
-nul
+nul.venv-om/
