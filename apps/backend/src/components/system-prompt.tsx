@@ -122,12 +122,15 @@ export function SystemPrompt() {
 							<ListItem>
 								<Bold>{model.name}</Bold> (table: {model.table}
 								{model.description && ` — ${model.description}`}){'\n'}Dimensions:{' '}
-								{model.dimensions.join(', ') || 'none'}
+								{Object.keys(model.dimensions).join(', ') || 'none'}
 								{'\n'}Measures:{' '}
 								{Object.entries(model.measures)
-									.map(([name, type]) => `${name} (${type})`)
+									.map(([name, info]) => `${name} (${info.type})`)
 									.join(', ')}
-								{model.joins.length > 0 && `\nJoins: ${model.joins.join(', ')}`}
+								{Object.keys(model.joins).length > 0 &&
+									`\nJoins: ${Object.entries(model.joins)
+										.map(([k, j]) => `${k} → ${j.to_model}`)
+										.join(', ')}`}
 							</ListItem>
 						))}
 					</List>

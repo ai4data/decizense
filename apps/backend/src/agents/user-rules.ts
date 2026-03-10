@@ -83,22 +83,49 @@ export function getConnections(): Connection[] | null {
 	}
 }
 
+export type MeasureFilter = {
+	column: string;
+	operator: string;
+	value: unknown;
+};
+
+export type MeasureInfo = {
+	type: string;
+	column?: string;
+	filters?: MeasureFilter[];
+};
+
+export type DimensionInfo = {
+	column: string;
+	description?: string;
+};
+
+export type JoinInfo = {
+	to_model: string;
+	foreign_key: string;
+	related_key: string;
+	type?: string;
+};
+
 export type SemanticModelInfo = {
 	name: string;
 	table: string;
+	schema?: string;
 	description?: string;
-	dimensions: string[];
-	measures: Record<string, string>;
-	joins: string[];
+	primary_key?: string;
+	time_dimension?: string;
+	dimensions: Record<string, DimensionInfo>;
+	measures: Record<string, MeasureInfo>;
+	joins: Record<string, JoinInfo>;
 };
 
-export function getSemanticModels(): SemanticModelInfo[] | null {
-	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
-	if (!projectFolder) {
+export function getSemanticModels(projectFolder?: string): SemanticModelInfo[] | null {
+	const folder = projectFolder ?? env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!folder) {
 		return null;
 	}
 
-	const yamlPath = join(projectFolder, 'semantics', 'semantic_model.yml');
+	const yamlPath = join(folder, 'semantics', 'semantic_model.yml');
 	if (!existsSync(yamlPath)) {
 		return null;
 	}
@@ -113,15 +140,37 @@ export function getSemanticModels(): SemanticModelInfo[] | null {
 		return Object.entries(parsed.models).map(([name, model]) => ({
 			name,
 			table: model.table as string,
+			schema: model.schema as string | undefined,
 			description: model.description as string | undefined,
-			dimensions: Object.keys((model.dimensions as Record<string, unknown>) || {}),
-			measures: Object.fromEntries(
-				Object.entries((model.measures as Record<string, Record<string, string>>) || {}).map(([k, v]) => [
+			primary_key: model.primary_key as string | undefined,
+			time_dimension: model.time_dimension as string | undefined,
+			dimensions: Object.fromEntries(
+				Object.entries((model.dimensions as Record<string, Record<string, string>>) || {}).map(([k, v]) => [
 					k,
-					v.type,
+					{ column: v.column ?? k, description: v.description },
 				]),
 			),
-			joins: Object.keys((model.joins as Record<string, unknown>) || {}),
+			measures: Object.fromEntries(
+				Object.entries((model.measures as Record<string, Record<string, unknown>>) || {}).map(([k, v]) => [
+					k,
+					{
+						type: v.type as string,
+						column: v.column as string | undefined,
+						filters: (v.filters as MeasureFilter[] | undefined) ?? [],
+					},
+				]),
+			),
+			joins: Object.fromEntries(
+				Object.entries((model.joins as Record<string, Record<string, string>>) || {}).map(([k, v]) => [
+					k,
+					{
+						to_model: v.to_model,
+						foreign_key: v.foreign_key,
+						related_key: v.related_key,
+						type: v.type,
+					},
+				]),
+			),
 		}));
 	} catch (error) {
 		console.error('Error reading semantic_model.yml:', error);
@@ -138,13 +187,13 @@ export type BusinessRuleInfo = {
 	guidance: string;
 };
 
-export function getBusinessRules(): BusinessRuleInfo[] | null {
-	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
-	if (!projectFolder) {
+export function getBusinessRules(projectFolder?: string): BusinessRuleInfo[] | null {
+	const folder = projectFolder ?? env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!folder) {
 		return null;
 	}
 
-	const yamlPath = join(projectFolder, 'semantics', 'business_rules.yml');
+	const yamlPath = join(folder, 'semantics', 'business_rules.yml');
 	if (!existsSync(yamlPath)) {
 		return null;
 	}
@@ -176,22 +225,33 @@ export type ClassificationInfo = {
 	tags: string[];
 };
 
-export function getClassifications(): ClassificationInfo[] | null {
-	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
-	if (!projectFolder) {
+export function getClassifications(projectFolder?: string): ClassificationInfo[] | null {
+	const folder = projectFolder ?? env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!folder) {
 		return null;
 	}
 
-	const yamlPath = join(projectFolder, 'semantics', 'business_rules.yml');
+	const yamlPath = join(folder, 'semantics', 'business_rules.yml');
 	if (!existsSync(yamlPath)) {
 		return null;
 	}
 
 	try {
 		const content = readFileSync(yamlPath, 'utf-8');
-		const parsed = YAML.parse(content) as { classifications?: Record<string, ClassificationInfo> } | null;
+		const parsed = YAML.parse(content) as {
+			classifications?: ClassificationInfo[] | Record<string, ClassificationInfo>;
+		} | null;
 		if (!parsed?.classifications) {
 			return null;
+		}
+
+		// classifications can be an array [{name, ...}] or an object {name: {...}}
+		if (Array.isArray(parsed.classifications)) {
+			return parsed.classifications.map((cls) => ({
+				name: cls.name,
+				description: cls.description,
+				tags: cls.tags || [],
+			}));
 		}
 
 		return Object.entries(parsed.classifications).map(([name, classification]) => ({

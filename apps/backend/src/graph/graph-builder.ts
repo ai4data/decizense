@@ -99,7 +99,7 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 	}
 
 	// ── 2. Semantic models → Model, Dimension, Measure, Column nodes ──
-	const semanticModels = getSemanticModels();
+	const semanticModels = getSemanticModels(projectFolder);
 	if (semanticModels && bundles) {
 		for (const model of semanticModels) {
 			// Resolve which bundle this model belongs to
@@ -109,8 +109,8 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 
 			const modelId = `model:${bundleId}/${model.name}`;
 
-			// Determine schema — try to find from bundle tables
-			const schemaName = resolveSchema(model.table, parentBundle);
+			// Determine schema — try to find from bundle tables, fall back to YAML schema
+			const schemaName = model.schema ?? resolveSchema(model.table, parentBundle);
 			const tableId = `table:${dbId}/${schemaName}.${model.table}`;
 
 			graph.addNode({
@@ -118,6 +118,8 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 				type: NodeType.Model,
 				properties: {
 					table: model.table,
+					primary_key: model.primary_key ?? null,
+					time_dimension: model.time_dimension ?? null,
 					description: model.description ?? '',
 				},
 			});
@@ -130,14 +132,15 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 			}
 
 			// Dimensions
-			for (const dimName of model.dimensions) {
+			for (const [dimName, dimDef] of Object.entries(model.dimensions)) {
 				const dimId = `dim:${bundleId}/${model.name}.${dimName}`;
-				const columnId = `column:${dbId}/${schemaName}.${model.table}/${dimName}`;
+				const colName = dimDef.column ?? dimName;
+				const columnId = `column:${dbId}/${schemaName}.${model.table}/${colName}`;
 
 				graph.addNode({
 					id: dimId,
 					type: NodeType.Dimension,
-					properties: { column: dimName },
+					properties: { column: colName, description: dimDef.description ?? '' },
 				});
 
 				// Ensure column node exists
@@ -154,19 +157,22 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 			}
 
 			// Measures
-			for (const [measureName, measureType] of Object.entries(model.measures)) {
+			for (const [measureName, measureDef] of Object.entries(model.measures)) {
 				const measureId = `measure:${bundleId}/${model.name}.${measureName}`;
 				graph.addNode({
 					id: measureId,
 					type: NodeType.Measure,
-					properties: { type: measureType },
+					properties: {
+						type: measureDef.type,
+						column: measureDef.column ?? null,
+						description: '',
+					},
 				});
 				graph.addEdge({ from: modelId, to: measureId, type: EdgeType.DEFINES });
 
-				// For non-count measures, the measure aggregates a column with the same name
-				// (the actual column info comes from the full YAML, but the summary loader
-				// only gives us the type string — so we use measure name as column name heuristic)
-				const columnId = `column:${dbId}/${schemaName}.${model.table}/${measureName}`;
+				// AGGREGATES → Column (use declared column, fall back to measure name)
+				const aggCol = measureDef.column ?? measureName;
+				const columnId = `column:${dbId}/${schemaName}.${model.table}/${aggCol}`;
 				if (!graph.getNode(columnId)) {
 					graph.addNode({
 						id: columnId,
@@ -175,18 +181,31 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 					});
 				}
 				graph.addEdge({ from: measureId, to: columnId, type: EdgeType.AGGREGATES });
+
+				// FILTERS_ON edges for baked-in filters
+				for (const f of measureDef.filters ?? []) {
+					const filterColId = `column:${dbId}/${schemaName}.${model.table}/${f.column}`;
+					if (!graph.getNode(filterColId)) {
+						graph.addNode({
+							id: filterColId,
+							type: NodeType.Column,
+							properties: { data_type: 'unknown', is_pii: false },
+						});
+					}
+					graph.addEdge({ from: measureId, to: filterColId, type: EdgeType.FILTERS_ON });
+				}
 			}
 
 			// Joins between models
-			for (const joinTarget of model.joins) {
-				const targetModelId = `model:${bundleId}/${joinTarget}`;
+			for (const [, joinDef] of Object.entries(model.joins)) {
+				const targetModelId = `model:${bundleId}/${joinDef.to_model}`;
 				graph.addEdge({ from: modelId, to: targetModelId, type: EdgeType.JOINS_WITH });
 			}
 		}
 	}
 
 	// ── 3. Business rules → Rule nodes + APPLIES_TO edges ──
-	const rules = getBusinessRules();
+	const rules = getBusinessRules(projectFolder);
 	if (rules) {
 		for (const rule of rules) {
 			const ruleId = `rule:${rule.name}`;
@@ -213,7 +232,7 @@ export function buildFromProject(projectFolder: string): GovernanceGraph {
 	}
 
 	// ── 4. Classifications → Classification nodes + CLASSIFIES edges ──
-	const classifications = getClassifications();
+	const classifications = getClassifications(projectFolder);
 	if (classifications) {
 		for (const cls of classifications) {
 			const classId = `class:${cls.name}`;
