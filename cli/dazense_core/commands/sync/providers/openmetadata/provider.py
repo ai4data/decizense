@@ -17,16 +17,18 @@ from .client import OpenMetadataClient
 console = create_console()
 
 
-def _get_om_url() -> str:
-    """Get OpenMetadata URL from env or default."""
-    return os.environ.get("OPENMETADATA_URL", "http://localhost:8585")
-
-
-def _get_om_credentials() -> tuple[str, str]:
-    """Get OM email and password from env or defaults."""
-    email = os.environ.get("OPENMETADATA_EMAIL", "admin@open-metadata.org")
-    password = os.environ.get("OPENMETADATA_PASSWORD", "admin")
-    return email, password
+def _get_client(config: DazenseConfig) -> OpenMetadataClient:
+    """Build an OM client from config or env vars."""
+    om = config.openmetadata
+    if om:
+        url = om.url
+        email = om.email
+        password = om.password
+    else:
+        url = os.environ.get("OPENMETADATA_URL", "http://localhost:8585")
+        email = os.environ.get("OPENMETADATA_EMAIL", "admin@open-metadata.org")
+        password = os.environ.get("OPENMETADATA_PASSWORD", "admin")
+    return OpenMetadataClient(url, email, password)
 
 
 class OpenMetadataSyncProvider(SyncProvider):
@@ -35,8 +37,8 @@ class OpenMetadataSyncProvider(SyncProvider):
     Fetches table schemas, column metadata, tags, and descriptions from
     the OpenMetadata API and writes them to openmetadata/<service>/<db>/<schema>/tables.yml.
 
-    These files are then available as input to the governance graph compiler
-    for discovered-metadata enrichment.
+    If openmetadata.services is set in dazense_config.yaml, only those services
+    are synced. Otherwise, all services are discovered from the OM API.
     """
 
     @property
@@ -54,21 +56,29 @@ class OpenMetadataSyncProvider(SyncProvider):
     def get_items(self, config: DazenseConfig) -> list[Any]:
         """Return list of OM service names to sync.
 
-        Discovers services from the OM API. Returns empty if OM is unreachable.
+        If config.openmetadata.services is set, use that list.
+        Otherwise, discover all services from the OM API.
         """
         try:
-            url = _get_om_url()
-            email, password = _get_om_credentials()
-            client = OpenMetadataClient(url, email, password)
+            client = _get_client(config)
             if not client.health_check():
                 return []
+
+            # Use configured services if specified
+            om = config.openmetadata
+            if om and om.services:
+                return list(om.services)
+
+            # Otherwise discover all services
             services = client.list_database_services()
             return [s["name"] for s in services]
         except Exception:
             return []
 
     def should_sync(self, config: DazenseConfig) -> bool:
-        """Check if OM is reachable and has services."""
+        """Check if OM is configured or reachable."""
+        if config.openmetadata:
+            return True
         return len(self.get_items(config)) > 0
 
     def sync(self, items: list[Any], output_path: Path, project_path: Path | None = None) -> SyncResult:
@@ -76,15 +86,18 @@ class OpenMetadataSyncProvider(SyncProvider):
         if not items:
             return SyncResult(provider_name=self.name, items_synced=0)
 
-        url = _get_om_url()
-        email, password = _get_om_credentials()
-        client = OpenMetadataClient(url, email, password)
+        # Load config to get client settings
+        config = DazenseConfig.try_load(path=project_path)
+        if not config:
+            config = DazenseConfig(project_name="")
+        client = _get_client(config)
 
         total_tables = 0
         total_services = 0
 
         console.print(f"\n[bold cyan]{self.emoji}  Syncing {self.name}[/bold cyan]")
-        console.print(f"[dim]Server:[/dim] {url}")
+        console.print(f"[dim]Server:[/dim] {client.base_url}")
+        console.print(f"[dim]Services:[/dim] {', '.join(items)}")
         console.print(f"[dim]Location:[/dim] {output_path.absolute()}\n")
 
         for service_name in items:
