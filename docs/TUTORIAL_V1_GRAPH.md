@@ -326,54 +326,68 @@ enforcement test. Add these to your `dataset.yaml` to close the loop.
 
 ---
 
-## Step 7: Enrich with OpenMetadata (optional)
+## Step 7: Enrich with external catalogs (optional)
 
-If you have an OpenMetadata instance running, you can enrich the graph with
-discovered metadata.
+dazense can enrich the governance graph with metadata from external data
+catalogs. The enrichment is **additive** — catalog tags create CLASSIFIES
+edges in the graph, but local YAML stays the source of truth. Mismatches
+surface as gaps, not errors.
 
-### Configure OpenMetadata in your project
+Currently supported catalogs: **OpenMetadata**. The architecture is
+pluggable — adding Unity Catalog, Atlan, Collibra, or any other catalog
+means implementing a single `CatalogEnrichmentProvider` class.
 
-Add an `openmetadata` section to `dazense_config.yaml` to scope the sync
-to specific services — this prevents pulling all tables from a production
-OM instance:
+### 7a. Configure OpenMetadata
+
+Add an `openmetadata` section to `dazense_config.yaml`:
 
 ```yaml
 # dazense_config.yaml
 openmetadata:
     url: http://localhost:8585
-    services: [jaffle_shop_postgres] # only sync these services
+    services: [jaffle_shop_postgres]
+    tag_mappings:
+        PII: PII
+        Sensitive: PII
+        PersonalData: PII
+        Financial: Financial
 ```
 
-| Field      | Description                                                |
-| ---------- | ---------------------------------------------------------- |
-| `url`      | OpenMetadata server URL (default: `http://localhost:8585`) |
-| `email`    | Login email (default: `admin@open-metadata.org`)           |
-| `password` | Login password (default: `admin`)                          |
-| `services` | List of service names to sync (empty = all services)       |
+| Field          | Description                                                |
+| -------------- | ---------------------------------------------------------- |
+| `url`          | OpenMetadata server URL (default: `http://localhost:8585`) |
+| `email`        | Login email (default: `admin@open-metadata.org`)           |
+| `password`     | Login password (default: `admin`)                          |
+| `services`     | List of service names to sync (empty = all services)       |
+| `tag_mappings` | Map catalog tag prefixes to graph classification names     |
 
-### Sync and enrich
+The `tag_mappings` field controls which catalog tags trigger governance
+classifications. For example, `Sensitive: PII` means any column tagged
+`Sensitive` in the catalog gets a `CLASSIFIES` edge from `class:PII`.
+Dotted tags like `PII.Email` match by prefix (`PII`).
+
+### 7b. Sync and enrich
 
 ```powershell
-# Navigate to the project directory
 cd C:\Users\hzmarrou\OneDrive\python\learning\dazense\example
 
-# Step 1: Sync metadata from OpenMetadata
+# Step 1: Pull metadata from the catalog
 dazense sync -p openmetadata
 
-# Step 2: Enrich the graph
+# Step 2: Enrich the graph with catalog metadata
 dazense graph enrich
 ```
 
 Sync output:
 
 ```
-🔍  Syncing OpenMetadata
+Syncing OpenMetadata
 Server: http://localhost:8585
 Services: jaffle_shop_postgres
 Location: .../example/openmetadata
 
 Service: jaffle_shop_postgres
-  ✓ jaffle_shop.main: 8 tables
+  jaffle_shop.main: 8 tables
 ```
 
 Enrichment output:
@@ -381,28 +395,87 @@ Enrichment output:
 ```
 dazense graph enrich
 
+OpenMetadata: 27 actions
+
 Enrichment complete:
-  Nodes: 77 → 80 (+3)
-  Edges: 100 → 106 (+6)
-  Actions: 25
+  Nodes: 77 → 81 (+4)
+  Edges: 100 → 110 (+10)
+  Actions: 27
 
   Enriched: 20 existing nodes
-  Discovered: 5 new nodes from OM
-    + column:duckdb-jaffle-shop/main.orders/id
-    + column:duckdb-jaffle-shop/main.customers/id
-    ...
+  Discovered: 5 new nodes
+  Classifications: 1 from catalog tags
 ```
 
 The enrichment:
 
 - Fills in `data_type` for columns that were "unknown"
-- Adds descriptions from the OM catalog
+- Adds descriptions from the catalog
 - Discovers columns that exist in the database but aren't in your semantic model
 - Creates `DISCOVERED_BY` edges for provenance tracking
+- **Creates `CLASSIFIES` edges** from catalog tags (e.g. `PII.Name` tag on
+  `first_name` creates `class:PII --CLASSIFIES--> column:first_name`)
 
-Without the `services` filter, `dazense sync -p openmetadata` would pull
-**all** tables from every service in your OM instance. The config keeps
-the sync scoped to what's relevant for your project.
+### 7c. Find PII gaps between catalog and policy
+
+Now the interesting part — check if the catalog found PII that your local
+policy doesn't block:
+
+```powershell
+dazense graph gaps --check pii -p example
+```
+
+If the catalog tags `first_name` and `last_name` as `PII.Name` **and**
+your policy.yml blocks them → no gap. Both the catalog and local config agree.
+
+If the catalog tags a column as PII but policy.yml doesn't block it → gap
+flagged. This bridges the gap between what the catalog knows and what your
+governance enforces.
+
+```
+dazense graph gaps --check pii
+
+Unblocked PII columns (1):
+  column:duckdb-jaffle-shop/main.customers/email
+    Classified as PII (source: openmetadata) but not blocked by policy
+
+1 PII gap(s) found
+```
+
+### 7d. Adding a custom catalog provider
+
+To plug in a different catalog, implement `CatalogEnrichmentProvider`:
+
+```python
+from dazense_core.graph.catalog import (
+    CatalogEnrichmentProvider,
+    CatalogDiscovery,
+    CatalogTable,
+    CatalogColumn,
+)
+
+class UnityCatalogProvider(CatalogEnrichmentProvider):
+    @property
+    def name(self) -> str:
+        return "Unity Catalog"
+
+    @property
+    def tag_mappings(self) -> dict[str, str]:
+        return {"pii": "PII", "sensitive": "PII"}
+
+    def discover(self, path: Path) -> list[CatalogDiscovery]:
+        # Read your catalog's format, return standardized CatalogDiscovery
+        ...
+```
+
+Then use it:
+
+```python
+graph.enrich_from_catalog(UnityCatalogProvider(), path_to_catalog_data)
+```
+
+The graph handles classification edges, gap analysis, and provenance
+tracking identically — regardless of which catalog the data came from.
 
 ---
 

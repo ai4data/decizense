@@ -342,50 +342,63 @@ def enrich(
     *,
     project_path: Annotated[str | None, Parameter(name=["-p", "--project-path"])] = None,
 ):
-    """Enrich graph with OpenMetadata discovered metadata.
+    """Enrich graph with metadata from external catalogs.
 
-    Reads openmetadata/ sync output and merges discovered columns,
-    data types, descriptions, and tags into the governance graph.
+    Scans for catalog sync output directories (e.g. openmetadata/) and merges
+    discovered columns, data types, descriptions, and tags into the governance graph.
 
-    Run `dazense sync -p openmetadata` first to pull OM metadata.
+    Supported catalogs: OpenMetadata (more coming).
+    Run `dazense sync -p openmetadata` first to pull catalog metadata.
     """
+    from dazense_core.graph.catalog import CatalogEnrichmentProvider, OpenMetadataCatalogProvider
+
     console.print("\n[bold cyan]dazense graph enrich[/bold cyan]\n")
     base = Path(project_path) if project_path else Path.cwd()
     g = _compile(project_path)
 
-    om_dir = base / "openmetadata"
-    if not om_dir.exists():
-        console.print("[yellow]No openmetadata/ directory found.[/yellow]")
-        console.print("[dim]Run `dazense sync -p openmetadata` first to pull metadata from OpenMetadata.[/dim]\n")
-        return
+    # Registry of catalog providers and their expected directories
+    catalog_providers: list[tuple[CatalogEnrichmentProvider, Path]] = [
+        (OpenMetadataCatalogProvider(), base / "openmetadata"),
+    ]
 
+    total_actions: list[str] = []
     before_nodes = g.node_count
     before_edges = g.edge_count
 
-    actions = g.enrich_from_openmetadata(om_dir)
+    for provider, catalog_dir in catalog_providers:
+        if not catalog_dir.exists():
+            continue
+
+        actions = g.enrich_from_catalog(provider, catalog_dir)
+        if actions:
+            console.print(f"[bold green]{provider.name}:[/bold green] {len(actions)} actions")
+            total_actions.extend(actions)
 
     after_nodes = g.node_count
     after_edges = g.edge_count
 
-    if actions:
-        console.print("[bold green]Enrichment complete:[/bold green]")
+    if total_actions:
+        console.print("\n[bold green]Enrichment complete:[/bold green]")
         console.print(f"  Nodes: {before_nodes} → {after_nodes} (+{after_nodes - before_nodes})")
         console.print(f"  Edges: {before_edges} → {after_edges} (+{after_edges - before_edges})")
-        console.print(f"  Actions: {len(actions)}")
+        console.print(f"  Actions: {len(total_actions)}")
 
-        # Summarize by action type
-        enriched = [a for a in actions if a.startswith("enriched")]
-        discovered = [a for a in actions if a.startswith("discovered")]
+        enriched = [a for a in total_actions if a.startswith("enriched")]
+        discovered = [a for a in total_actions if a.startswith("discovered")]
+        classified = [a for a in total_actions if a.startswith("created classification")]
         if enriched:
             console.print(f"\n  [cyan]Enriched:[/cyan] {len(enriched)} existing nodes")
         if discovered:
-            console.print(f"  [green]Discovered:[/green] {len(discovered)} new nodes from OM")
+            console.print(f"  [green]Discovered:[/green] {len(discovered)} new nodes")
             for d in discovered[:10]:
                 console.print(f"    [dim]+ {d.replace('discovered ', '')}[/dim]")
             if len(discovered) > 10:
                 console.print(f"    [dim]... and {len(discovered) - 10} more[/dim]")
+        if classified:
+            console.print(f"  [magenta]Classifications:[/magenta] {len(classified)} from catalog tags")
     else:
-        console.print("[dim]No enrichment actions — OM metadata didn't match any graph nodes.[/dim]")
+        console.print("[dim]No catalog directories found or no metadata matched graph nodes.[/dim]")
+        console.print("[dim]Run `dazense sync -p openmetadata` first to pull catalog metadata.[/dim]")
     console.print()
 
 

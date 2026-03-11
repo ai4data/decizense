@@ -10,6 +10,10 @@ class OpenMetadataConfig(BaseModel):
     email: str = Field(default="admin@open-metadata.org", description="Login email")
     password: str = Field(default="admin", description="Login password")
     services: list[str] = Field(default_factory=list, description="Service names to sync (empty = all)")
+    tag_mappings: dict[str, str] = Field(
+        default_factory=lambda: {"PII": "PII", "Sensitive": "PII", "PersonalData": "PII"},
+        description="Map OM tag prefixes to graph classification names",
+    )
 
     @classmethod
     def promptConfig(cls) -> "OpenMetadataConfig":

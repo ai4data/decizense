@@ -10,6 +10,7 @@ from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 
+from dazense_core.graph.catalog import CatalogEnrichmentProvider, OpenMetadataCatalogProvider
 from dazense_core.graph.types import (
     EdgeType,
     GapEntry,
@@ -442,112 +443,168 @@ class GovernanceGraph:
 
         return GraphStats(nodes_by_type=nodes_by_type, edges_by_type=edges_by_type)
 
-    def enrich_from_openmetadata(self, om_dir: Path) -> list[str]:
-        """Merge discovered metadata from OpenMetadata sync output into this graph.
+    def enrich_from_catalog(
+        self,
+        provider: CatalogEnrichmentProvider,
+        path: Path,
+    ) -> list[str]:
+        """Enrich graph with metadata from any catalog provider.
 
-        Reads openmetadata/<service>/<db>/<schema>/tables.yml files written by
-        the OM sync provider. For each table/column found:
-        - If a matching Table node exists, enriches its properties (description, om_fqn)
-        - If a matching Column node exists, enriches data_type, description, tags
-        - Creates new Column nodes for OM-discovered columns not yet in the graph
-        - Adds DISCOVERED_BY edges from enriched nodes to a synthetic om:<service> node
+        Works with any CatalogEnrichmentProvider implementation
+        (OpenMetadata, Unity Catalog, Atlan, Collibra, …).
+
+        For each discovered table/column:
+        - Enriches existing nodes with catalog metadata (description, data_type)
+        - Creates new Column nodes for catalog-discovered columns not in the graph
+        - Adds DISCOVERED_BY edges to a synthetic catalog service node
+        - Creates CLASSIFIES edges from catalog tags via provider.tag_mappings
 
         Returns list of enrichment actions taken.
         """
-        import yaml
-
-        if not om_dir.exists():
+        discoveries = provider.discover(path)
+        if not discoveries:
             return []
 
+        tag_mappings = provider.tag_mappings
+        source_label = provider.name.lower().replace(" ", "_")
         actions: list[str] = []
 
-        for tables_yml in sorted(om_dir.rglob("tables.yml")):
-            try:
-                data = yaml.safe_load(tables_yml.read_text())
-            except Exception:
-                continue
+        for discovery in discoveries:
+            service_id = f"om:{discovery.service_name}"
 
-            if not data or "tables" not in data:
-                continue
-
-            service = data.get("service", "unknown")
-            om_service_id = f"om:{service}"
-
-            # Create OM service node if needed
-            if not self.get_node(om_service_id):
+            # Create catalog service node if needed
+            if not self.get_node(service_id):
                 self._add_node(
                     GraphNode(
-                        id=om_service_id,
+                        id=service_id,
                         type=NodeType.Bundle,
                         properties={
-                            "display_name": f"OpenMetadata: {service}",
-                            "source": "openmetadata",
+                            "display_name": f"{provider.name}: {discovery.service_name}",
+                            "source": source_label,
                             "certification": "discovered",
                         },
                     )
                 )
 
-            schema_name = data.get("schema", "")
-
-            for table_data in data["tables"]:
-                table_name = table_data["name"]
-                om_fqn = table_data.get("fqn", "")
-
-                # Find matching table node by schema.table pattern
-                matched_table_id = self._match_table(schema_name, table_name)
+            for table in discovery.tables:
+                matched_table_id = self._match_table(table.schema_name, table.table_name)
 
                 if matched_table_id:
                     node = self.get_node(matched_table_id)
                     if node:
-                        # Enrich existing table with OM metadata
-                        if table_data.get("description"):
-                            node.properties["om_description"] = table_data["description"]
-                        node.properties["om_fqn"] = om_fqn
-                        node.properties["om_table_type"] = table_data.get("table_type", "")
-                        self._add_edge(GraphEdge(from_=matched_table_id, to=om_service_id, type=EdgeType.DISCOVERED_BY))
+                        if table.description:
+                            node.properties["om_description"] = table.description
+                        if table.fqn:
+                            node.properties["om_fqn"] = table.fqn
+                        if table.table_type:
+                            node.properties["om_table_type"] = table.table_type
+                        self._add_edge(GraphEdge(from_=matched_table_id, to=service_id, type=EdgeType.DISCOVERED_BY))
                         actions.append(f"enriched table {matched_table_id}")
 
                     # Enrich columns
-                    for col_data in table_data.get("columns", []):
-                        col_name = col_data["name"]
-                        # Try to find existing column node
-                        col_id = self._match_column(schema_name, table_name, col_name)
+                    for col in table.columns:
+                        col_id = self._match_column(table.schema_name, table.table_name, col.column_name)
 
                         if col_id and self.get_node(col_id):
                             col_node = self.get_node(col_id)
                             if col_node:
-                                if col_data.get("data_type") and col_node.properties.get("data_type") == "unknown":
-                                    col_node.properties["data_type"] = col_data["data_type"]
-                                if col_data.get("description"):
-                                    col_node.properties["om_description"] = col_data["description"]
-                                if col_data.get("tags"):
-                                    col_node.properties["om_tags"] = col_data["tags"]
+                                if col.data_type != "unknown" and col_node.properties.get("data_type") == "unknown":
+                                    col_node.properties["data_type"] = col.data_type
+                                if col.description:
+                                    col_node.properties["om_description"] = col.description
+                                if col.tags:
+                                    col_node.properties["om_tags"] = col.tags
+                                    self._classify_from_tags(col_id, col.tags, tag_mappings, source_label, actions)
                                 actions.append(f"enriched column {col_id}")
                         elif matched_table_id:
-                            # OM discovered a column not in the governance YAML — add it
+                            # Catalog discovered a column not in the governance YAML
                             matched_node = self.get_node(matched_table_id)
                             db_id = matched_node.properties.get("database_id", "") if matched_node else ""
-                            new_col_id = f"column:{db_id}/{schema_name}.{table_name}/{col_name}"
+                            new_col_id = f"column:{db_id}/{table.schema_name}.{table.table_name}/{col.column_name}"
                             if not self.get_node(new_col_id):
                                 self._add_node(
                                     GraphNode(
                                         id=new_col_id,
                                         type=NodeType.Column,
                                         properties={
-                                            "data_type": col_data.get("data_type", "unknown"),
+                                            "data_type": col.data_type,
                                             "is_pii": False,
-                                            "om_description": col_data.get("description", ""),
-                                            "source": "openmetadata",
-                                            **({"om_tags": col_data["tags"]} if col_data.get("tags") else {}),
+                                            "om_description": col.description,
+                                            "source": source_label,
+                                            **({"om_tags": col.tags} if col.tags else {}),
                                         },
                                     )
                                 )
-                                self._add_edge(
-                                    GraphEdge(from_=new_col_id, to=om_service_id, type=EdgeType.DISCOVERED_BY)
-                                )
+                                self._add_edge(GraphEdge(from_=new_col_id, to=service_id, type=EdgeType.DISCOVERED_BY))
+                                if col.tags:
+                                    self._classify_from_tags(new_col_id, col.tags, tag_mappings, source_label, actions)
                                 actions.append(f"discovered column {new_col_id}")
 
         return actions
+
+    def enrich_from_openmetadata(
+        self,
+        om_dir: Path,
+        tag_mappings: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Convenience wrapper: enrich from OpenMetadata sync output.
+
+        Equivalent to enrich_from_catalog(OpenMetadataCatalogProvider(...), om_dir).
+        """
+        provider = OpenMetadataCatalogProvider(tag_mappings_override=tag_mappings)
+        return self.enrich_from_catalog(provider, om_dir)
+
+    def _classify_from_tags(
+        self,
+        col_id: str,
+        tags: list[str],
+        tag_mappings: dict[str, str],
+        source_label: str,
+        actions: list[str],
+    ) -> None:
+        """Create CLASSIFIES edges from catalog tags using tag_mappings.
+
+        Handles dotted tag format (e.g. 'PII.Email' → prefix 'PII').
+        Case-insensitive matching against tag_mappings keys.
+        """
+        lower_mappings = {k.lower(): v for k, v in tag_mappings.items()}
+
+        seen_classes: set[str] = set()
+        for tag in tags:
+            prefix = tag.split(".")[0]
+
+            classification_name = lower_mappings.get(prefix.lower())
+            if not classification_name:
+                classification_name = lower_mappings.get(tag.lower())
+            if not classification_name:
+                continue
+            if classification_name in seen_classes:
+                continue
+            seen_classes.add(classification_name)
+
+            class_id = f"class:{classification_name}"
+
+            if not self.get_node(class_id):
+                self._add_node(
+                    GraphNode(
+                        id=class_id,
+                        type=NodeType.Classification,
+                        properties={
+                            "description": f"{classification_name} (from {source_label})",
+                            "tags": [classification_name],
+                            "source": source_label,
+                        },
+                    )
+                )
+                actions.append(f"created classification {class_id} from {source_label} tags")
+
+            # Avoid duplicate CLASSIFIES edges (policy compiler may have already created one)
+            already_exists = any(
+                e.from_ == class_id and e.to == col_id and e.type == EdgeType.CLASSIFIES
+                for e in self._forward.get(class_id, [])
+            )
+            if not already_exists:
+                self._add_edge(GraphEdge(from_=class_id, to=col_id, type=EdgeType.CLASSIFIES))
 
     def _match_table(self, schema_name: str, table_name: str) -> str | None:
         """Find a table node matching schema.table across all database IDs."""

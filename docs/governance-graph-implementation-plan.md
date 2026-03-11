@@ -1,6 +1,6 @@
-# Implementation Plan: Governance Graph — Compiled IR from YAML Source
+# Governance Graph — Implementation Plan
 
-> **Status**: Phase 1 (compiler + IR) and Phase 2 (contracts + CLI) are **complete** with 84 passing tests (33 Python invariants, 20 contract traces, 24 TypeScript invariants, 7 cross-language parity). Next: graph-as-tools (V1.6) → OpenMetadata integration (V2).
+> **Status**: Phase 1 + Phase 2 implemented. CLI commands operational, contract ingestion wired.
 
 ## Context
 
@@ -43,18 +43,16 @@ policy.yml                  emit IR
 
 Compilation happens once at startup (or on file change). Consumers query the IR, never the raw YAML.
 
-### 2.1 Incremental compile strategy
+#### Incremental compile strategy
 
-Avoid full recompilation for every file change:
+The compiler tracks file hashes to avoid full rebuilds when only one source file changes:
 
-1. Compute per-file content hash for:
-    - `datasets/**/dataset.yaml`
-    - `semantics/semantic_model.yml`
-    - `semantics/business_rules.yml`
-    - `policies/policy.yml`
-2. Build a dependency map (file → affected node/edge sets).
-3. Rebuild only affected subgraph partitions.
-4. Re-run integrity checks (unique IDs, no dangling edges, schema-valid IR).
+1. On first compile: hash each source file (dataset.yaml, semantic_model.yml, etc.), store in `_fileHashes`.
+2. On recompile: compare current hashes to stored. Only re-process changed files.
+3. **Partial rebuild**: changed files emit new/updated nodes+edges; unchanged portions carry over from the previous IR.
+4. **Invalidation rule**: if a file's hash changes, all nodes sourced from that file are dropped and re-emitted. Cross-file edges (e.g., `APPLIES_TO` from rules → models) are re-resolved against the full node set.
+
+> **Phase 1 note**: implement the `_fileHashes` tracking and staleness detection, but do full rebuilds. Partial rebuild optimization deferred until performance requires it.
 
 ### 3. Typed edges with semantics
 
@@ -73,38 +71,66 @@ Every edge has a specific meaning — no generic "relates_to":
 | `FILTERS_ON`           | Measure → Column          | Baked-in filter dependency          |
 | `CLASSIFIES`           | Classification → Column   | Tag assignment (PII, Financial)     |
 | `WRAPS`                | Model → Table             | Semantic model wraps physical table |
-| `ALLOWS_JOIN`          | Bundle → JoinEdge         | Bundle authorizes this join edge    |
-| `JOIN_LEFT`            | JoinEdge → Table          | Left table of approved join         |
-| `JOIN_RIGHT`           | JoinEdge → Table          | Right table of approved join        |
+| `ALLOWS_JOIN`          | Bundle → JoinEdge         | Bundle pre-approves this join       |
+| `JOIN_LEFT`            | JoinEdge → Table          | Left side of the join               |
+| `JOIN_RIGHT`           | JoinEdge → Table          | Right side of the join              |
+
+> **Join edge modeling**: The original `ALLOWS_JOIN: Bundle → (Table, Table)` was a hyperedge — not representable in a standard adjacency list. Instead, we introduce a `JoinEdge` intermediary node. Each approved join becomes: `Bundle --ALLOWS_JOIN--> JoinEdge --JOIN_LEFT--> Table` and `JoinEdge --JOIN_RIGHT--> Table`. This keeps the graph as a proper directed graph with binary edges only.
 
 Contract edges (Phase 2+):
 
-| Edge         | From → To               | Semantic                                 |
-| ------------ | ----------------------- | ---------------------------------------- |
-| `TOUCHED`    | Contract → Table        | Query accessed this table                |
-| `USED`       | Contract → Measure      | Query used this metric                   |
-| `REFERENCED` | Contract → Rule         | Contract cited this rule                 |
-| `DECIDED`    | Contract → PolicyCheck  | Decision trace edge                      |
-| `FAILED`     | PolicyCheck → GraphNode | Check failed because of this node/entity |
+| Edge         | From → To              | Semantic                         |
+| ------------ | ---------------------- | -------------------------------- |
+| `TOUCHED`    | Contract → Table       | Query accessed this table        |
+| `USED`       | Contract → Measure     | Query used this metric           |
+| `REFERENCED` | Contract → Rule        | Contract cited this rule         |
+| `DECIDED`    | Contract → PolicyCheck | Decision trace edge (pass/warn)  |
+| `FAILED`     | Contract → PolicyCheck | Decision trace edge (fail/block) |
+
+> **DECIDED vs FAILED**: Splitting decision traces into two edge types allows queries like "show me all blocking checks" without filtering on properties — just follow `FAILED` edges.
 
 ---
 
 ## Node Types
 
-| Node Type        | ID Pattern                                                           | Source                    | Properties                           |
-| ---------------- | -------------------------------------------------------------------- | ------------------------- | ------------------------------------ |
-| `Bundle`         | `bundle:{bundle_id}`                                                 | `datasets/*/dataset.yaml` | display_name, certification, owners  |
-| `Table`          | `table:{db_id}/{schema}.{table}`                                     | bundle tables             | schema, database_type                |
-| `Column`         | `column:{db_id}/{schema}.{table}/{col}`                              | semantic dims + PII decls | data_type, is_pii                    |
-| `Model`          | `model:{bundle_id}/{model}`                                          | `semantic_model.yml`      | table, primary_key, time_dimension   |
-| `Dimension`      | `dim:{bundle_id}/{model}.{dim}`                                      | semantic model            | column, description                  |
-| `Measure`        | `measure:{bundle_id}/{model}.{measure}`                              | semantic model            | type, column, filters                |
-| `Rule`           | `rule:{name}`                                                        | `business_rules.yml`      | category, severity, guidance         |
-| `Classification` | `class:{name}`                                                       | business_rules.yml        | tags[]                               |
-| `Policy`         | `policy:root`                                                        | `policy.yml`              | pii_mode, max_rows, require_contract |
-| `JoinEdge`       | `join:{bundle_id}/{left_table}.{left_col}={right_table}.{right_col}` | bundle joins              | type, description                    |
-| `PolicyCheck`    | `check:{contract_id}/{check_name}`                                   | contract trace            | status, detail                       |
-| `Contract`       | `contract:{id}`                                                      | `contracts/runs/*.json`   | created_at, decision, actor          |
+| Node Type        | ID Pattern                                    | Source                    | Properties                           |
+| ---------------- | --------------------------------------------- | ------------------------- | ------------------------------------ |
+| `Bundle`         | `bundle:{bundle_id}`                          | `datasets/*/dataset.yaml` | display_name, certification, owners  |
+| `Table`          | `table:{db_id}/{schema}.{table}`              | bundle tables             | schema, database_type                |
+| `Column`         | `column:{db_id}/{schema}.{table}/{col}`       | semantic dims + PII decls | data_type, is_pii                    |
+| `Model`          | `model:{bundle_id}/{model}`                   | `semantic_model.yml`      | table, primary_key, time_dimension   |
+| `Dimension`      | `dim:{bundle_id}/{model}.{dim}`               | semantic model            | column, description                  |
+| `Measure`        | `measure:{bundle_id}/{model}.{measure}`       | semantic model            | type, column, filters                |
+| `Rule`           | `rule:{name}`                                 | `business_rules.yml`      | category, severity, guidance         |
+| `Classification` | `class:{name}`                                | business_rules.yml        | tags[]                               |
+| `Policy`         | `policy:root`                                 | `policy.yml`              | pii_mode, max_rows, require_contract |
+| `JoinEdge`       | `join:{bundle_id}/{left_table}:{right_table}` | bundle joins              | join_type, description               |
+| `Contract`       | `contract:{id}`                               | `contracts/runs/*.json`   | created_at, decision, actor          |
+| `PolicyCheck`    | `check:{contract_id}/{check_name}`            | contract policy checks    | status (pass/fail/warn), detail      |
+
+---
+
+## PII Gap Semantics
+
+PII coverage detection uses two independent edge types:
+
+- `CLASSIFIES`: `class:PII --CLASSIFIES--> column:X` — marks the column as PII
+- `BLOCKS`: `policy:root --BLOCKS--> column:X` — policy restricts access to the column
+
+**A gap exists** when a column has an inbound `CLASSIFIES` edge from `class:PII` but **no** inbound `BLOCKS` edge from `policy:root`. The helper `findUnblockedPiiColumns()` implements this check.
+
+---
+
+## Model → Table Resolution
+
+When a semantic model references a table name (e.g., `orders`), the compiler must resolve it to a canonical table ID. In multi-database bundles, ambiguity is possible.
+
+**Deterministic resolution rule**:
+
+1. If the model specifies `database`, use it directly: `table:{database}/{schema}.{table}`
+2. If no `database` field, resolve using the bundle's `warehouse.database_id`: `table:{bundle.warehouse.database_id}/{schema}.{table}`
+3. If multiple bundles contain the same table name, the model's parent bundle takes precedence.
+4. If still ambiguous, emit a compile warning (not error) and pick the first match alphabetically — deterministic but flagged.
 
 ---
 
@@ -122,7 +148,7 @@ Contract edges (Phase 2+):
     - Orphan tables (in bundle but no semantic model)
     - Ungoverned measures (no business rule `APPLIES_TO`)
     - Rules with no targets (`APPLIES_TO` edge count = 0)
-    - PII columns (`CLASSIFIES` from `class:PII`) without `BLOCKS` edge from `policy:root`
+    - PII columns without `BLOCKS` edge from policy (via `findUnblockedPiiColumns()`)
 
 4. **Change impact simulation**: "If I remove rule X, which measures lose governance?"
    → Delete rule node from copy of graph, re-run gap detection
@@ -130,7 +156,7 @@ Contract edges (Phase 2+):
 ### Decision-trace queries (Phase 2 — with contracts)
 
 5. **Decision trace**: "Why was contract X blocked?"
-   → `contract:X` → `DECIDED` → PolicyCheck nodes with pass/fail/detail
+   → `contract:X` → `FAILED` → PolicyCheck nodes with detail
 
 6. **Dead config detection**: Rules/policies never matched by any contract over N days
    → Rule nodes with zero inbound `REFERENCED` edges from recent contracts
@@ -153,15 +179,17 @@ Contract edges (Phase 2+):
 
 **New files:**
 
-| #   | File                                         | Purpose                                                                     |
-| --- | -------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | `schemas/governance-graph.schema.json`       | Canonical IR schema (single source of truth for TS and Python)              |
-| 2   | `apps/backend/src/graph/types.ts`            | TS graph types validated/generated from canonical schema                    |
-| 3   | `apps/backend/src/graph/governance-graph.ts` | `GovernanceGraph` class — adjacency list, traversal, query methods          |
-| 4   | `apps/backend/src/graph/graph-builder.ts`    | `buildFromProject(projectFolder)` — compiler using existing loaders         |
-| 5   | `cli/dazense_core/graph/__init__.py`         | Module init                                                                 |
-| 6   | `cli/dazense_core/graph/types.py`            | Python Pydantic types from canonical schema                                 |
-| 7   | `cli/dazense_core/graph/governance_graph.py` | Python standalone compiler + graph (reads YAML directly, no backend needed) |
+| #   | File                                         | Purpose                                                                                      |
+| --- | -------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 1   | `apps/backend/src/graph/types.ts`            | `NodeType`, `EdgeType` enums, `GraphNode`, `GraphEdge` interfaces                            |
+| 2   | `apps/backend/src/graph/governance-graph.ts` | `GovernanceGraph` class — adjacency list, traversal, query methods                           |
+| 3   | `apps/backend/src/graph/graph-builder.ts`    | `buildFromProject(projectFolder)` — the compiler: reads YAML via existing loaders, emits IR  |
+| 4   | `cli/dazense_core/graph/__init__.py`         | Module init                                                                                  |
+| 5   | `cli/dazense_core/graph/types.py`            | Pydantic models mirroring TS types                                                           |
+| 6   | `cli/dazense_core/graph/governance_graph.py` | Python standalone compiler + graph (reads YAML directly, no backend needed)                  |
+| 7   | `schemas/governance-graph.schema.json`       | Canonical IR schema — generated from TS types via `zod-to-json-schema` (not hand-maintained) |
+
+> **Schema file note**: The JSON schema is a **derived artifact**, generated from the TS Zod definitions. It is not a third source of truth — TS types are authoritative, Pydantic models must match, and the JSON schema is auto-generated for external consumers and validation.
 
 **Core API (both TS and Python):**
 
@@ -173,7 +201,7 @@ GovernanceGraph
   .impactOf(id) → GraphNode[]                  // transitive downstream
   .lineageOf(id) → GraphNode[]                 // transitive upstream
   .findGaps(sourceType, requiredEdge, targetType) → GraphNode[]
-  .findUnblockedPiiColumns() → GraphNode[]     // class:PII without policy:root BLOCKS
+  .findUnblockedPiiColumns() → GraphNode[]     // PII columns without BLOCKS edge
   .simulate(removals: string[]) → GapReport    // change impact simulation
   .stats() → { nodes_by_type, edges_by_type }
   .toJSON() → { nodes[], edges[] }
@@ -182,7 +210,19 @@ GovernanceGraph
 **Reuses existing loaders** — no YAML parsing duplication:
 
 - TS: `getDatasetBundles()`, `getSemanticModels()`, `getBusinessRules()`, `getPolicies()`, `getClassifications()` from `apps/backend/src/agents/user-rules.ts`
-- Python: YAML loading from `cli/dazense_core/semantic/models.py` and `cli/dazense_core/rules/models.py`
+- Python: `SemanticModel.load()` from `dazense_core/semantic/models.py` and `BusinessRules.load()` from `dazense_core/rules/models.py`
+
+### TS/Python Parity Requirement
+
+The **core graph data structure and traversal API** must produce identical results in both TS and Python given the same YAML input. Specifically:
+
+- `compile()` must produce the same nodes and edges (same IDs, same edge types)
+- `lineageOf()`, `impactOf()`, `findGaps()`, `simulate()` must return the same node sets
+- `toJSON()` output must be structurally identical
+
+**Not in parity scope**: CLI-only features (Rich output, `suggest-tests`), backend-only features (contract ingestion, policy engine integration). These are language-specific consumers of the shared IR.
+
+A **parity test** enforces this: compile the same fixture project in both languages, compare `toJSON()` output.
 
 ### Phase 2: CLI Commands + Decision Traces
 
@@ -202,28 +242,27 @@ dazense graph suggest-tests                     # auto-generate eval_test_cases 
 
 **Modify:** `cli/dazense_core/main.py` — register `graph` command
 
-**Integrate contracts as graph nodes**: Add a separate contract ingester that reads `contracts/runs/*.json` and augments graph edges. Keep `contract-writer.ts` storage-focused.
+**Contract integration via separate ingester**: A new `contract-ingester.ts` (or function within graph-builder) reads stored contract JSON files and emits Contract + PolicyCheck nodes with `TOUCHED`, `USED`, `REFERENCED`, `DECIDED`, and `FAILED` edges. The existing `contract-writer.ts` remains storage-only — it writes contract JSON to disk and is not modified.
 
-### Phase 3: Persistence + Versioning (future)
+### Out of scope (future)
 
 - **as_of versioning**: Graph snapshots per git commit. Requires git integration.
 - **OpenMetadata merge**: Precedence rules for OM imports. Requires OM integration to exist first.
-- **SQLite persistence**: For historical contract lineage queries at scale. Add `contract_graph_edges` table to existing `db.sqlite`.
-- **Visualization**: D3.js/Cytoscape.js frontend component. Export via `toJSON()`.
+- **Visualization**: D3.js/Cytoscape.js frontend component.
+- **SQLite persistence**: For historical contract lineage queries at scale.
+- **Incremental partial rebuild**: File hash tracking is implemented in Phase 1 but actual partial rebuilds deferred until performance requires it.
 
-### Architecture Decisions
+### Architecture decisions
 
 - **Python builds standalone** from YAML (no backend dependency). CLI works offline.
 - **YAML = source of truth**. Graph is ephemeral IR, rebuilt on every `compile()`.
 - **Canonical IDs** use composite keys (`warehouse_id/schema.table`) not display names.
-- **Model→Table ID resolution is deterministic**: resolve model table through bundle `warehouse.database_id`; if ambiguous across bundles/databases, fail compilation with explicit error.
-- **Cross-language parity is mandatory**: TS and Python outputs must validate against the same schema and match under normalized snapshot tests.
-- **No new storage for Phase 1**. In-memory only, rebuilt at startup (~ms for 100s of nodes).
-- **No new dependencies for Phase 1**. Pure TypeScript/Python adjacency lists.
+- **JSON schema is derived**, generated from TS Zod types — never hand-edited.
+- **Contract-writer untouched**. Contract ingestion is a read-only graph-builder concern, not a storage concern.
 
 ---
 
-## Critical Files to Reuse
+## Critical files to reuse
 
 | File                                       | What it provides                                                                                                              |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -231,32 +270,32 @@ dazense graph suggest-tests                     # auto-generate eval_test_cases 
 | `apps/shared/src/tools/build-contract.ts`  | Zod schemas for all types (DatasetBundle, Policy, Contract) — graph types must align                                          |
 | `cli/dazense_core/semantic/models.py`      | Python Pydantic models for semantic model YAML                                                                                |
 | `cli/dazense_core/rules/models.py`         | Python Pydantic models for business rules YAML                                                                                |
-| `cli/dazense_core/commands/validate.py`    | Existing procedural cross-file checks — candidate for refactoring to use graph queries                                        |
 | `apps/backend/src/policy/policy-engine.ts` | Policy engine — future integration point for graph-powered checks                                                             |
 
 ---
 
-## Verification Plan
+## Verification
 
-1. **Compile test**: Build graph from example project → assert invariants (non-zero nodes/edges, unique IDs, no dangling edges)
-2. **Lineage test**: `lineageOf("measure:jaffle_shop/orders.total_revenue")` returns column, table, bundle, 2 rules
-3. **Impact test**: `impactOf("column:duckdb-jaffle-shop/main.orders/amount")` returns 5+ measures
-4. **Gap test**: Remove a PII policy entry → `findUnblockedPiiColumns()` detects uncovered column
-5. **Simulation test**: `simulate(remove=["rule:exclude_returned_orders"])` → reports `measure:orders.total_revenue` loses governance
-6. **CLI test**: `dazense graph lineage orders.total_revenue` prints readable tree with Rich formatting
-7. **Canonical ID test**: Rename model display name, rebuild graph → same node IDs, lineage intact
-8. **Parity test**: TS and Python compilers produce identical normalized IR for the same fixture project
-9. **Regression**: Existing `dazense validate` and `dazense eval` still pass unchanged
+Tests use **invariants** (structural properties that must always hold) rather than brittle counts tied to a specific fixture.
 
----
+### Invariant-based tests (Phase 1)
 
-## Relationship to Existing V1
+1. **Compile roundtrip**: `toJSON(compile(project))` is valid against `governance-graph.schema.json`
+2. **Every measure has an AGGREGATES edge**: No measure node exists without at least one outbound `AGGREGATES` edge to a column
+3. **Every dimension has a READS edge**: No dimension node exists without an outbound `READS` edge
+4. **Every model has a WRAPS edge**: No model node exists without an outbound `WRAPS` edge to a table
+5. **Every bundle CONTAINS at least one table**: No bundle node exists without at least one `CONTAINS` edge
+6. **Lineage terminates at physical nodes**: `lineageOf(any_measure)` always includes at least one `Table` and one `Column` node
+7. **Impact terminates at semantic nodes**: `impactOf(any_column)` returns only `Measure`, `Dimension`, or `Rule` nodes (not other columns)
+8. **PII gap detection**: Given a fixture with one PII column and no BLOCKS edge, `findUnblockedPiiColumns()` returns exactly that column
+9. **Simulation is non-destructive**: After `simulate(remove=[...])`, the original graph is unchanged (same node/edge counts)
+10. **Canonical ID stability**: Rename a model's `display_name` in YAML, recompile → same node IDs, same edges
+11. **JoinEdge decomposition**: Every `ALLOWS_JOIN` edge targets a `JoinEdge` node, and every `JoinEdge` has exactly one `JOIN_LEFT` and one `JOIN_RIGHT` edge
 
-This plan builds **on top of** V1 (contracts, policies, bundles, semantic models). It does not replace any V1 code — it adds a new layer that reads the same YAML files and provides graph-powered queries. All existing tools, gates, and CLI commands continue to work unchanged.
+### Parity test
 
-The graph becomes the foundation for:
+12. **TS/Python produce identical IR**: Compile the same fixture project in both languages. Assert `toJSON()` output matches (node IDs, edge types, edge endpoints). Differences fail CI.
 
-- Smarter `dazense validate` (graph gap queries instead of procedural checks)
-- Smarter `dazense eval` (auto-generated test cases from graph analysis)
-- Contract provenance queries (which rules/columns were involved in a decision)
-- Change impact analysis before modifying governance config
+### Regression
+
+13. **Existing CLI commands unaffected**: `dazense test` and other existing commands still pass unchanged after graph module is added.
