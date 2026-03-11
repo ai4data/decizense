@@ -109,21 +109,22 @@ class TestBundleInvariants:
 
 
 class TestLineage:
-    def test_lineage_of_measure_includes_table_and_column(self, graph: GovernanceGraph):
+    def test_lineage_of_measure_includes_column(self, graph: GovernanceGraph):
+        """Lineage follows data flow: measure → column (AGGREGATES/FILTERS_ON)."""
         measures = graph.get_nodes_by_type(NodeType.Measure)
         for measure in measures:
             lineage = graph.lineage_of(measure.id)
             types_in_lineage = {n.type for n in lineage}
-            assert NodeType.Model in types_in_lineage, f"lineageOf({measure.id}) missing Model"
+            assert NodeType.Column in types_in_lineage, f"lineageOf({measure.id}) missing Column"
 
     def test_lineage_of_total_revenue(self, graph: GovernanceGraph):
-        """Specific test: total_revenue lineage should include orders table."""
+        """Specific test: total_revenue lineage should include the amount column."""
         revenue_nodes = [n for n in graph.get_nodes_by_type(NodeType.Measure) if "total_revenue" in n.id]
         assert len(revenue_nodes) == 1
         lineage = graph.lineage_of(revenue_nodes[0].id)
         lineage_ids = {n.id for n in lineage}
-        # Should trace back to the orders model
-        assert any("orders" in nid for nid in lineage_ids)
+        # Should trace to the amount column it aggregates
+        assert any("amount" in nid for nid in lineage_ids)
 
 
 # ── Invariant 7: Impact terminates at semantic nodes ──
@@ -131,21 +132,15 @@ class TestLineage:
 
 class TestImpact:
     def test_impact_of_column(self, graph: GovernanceGraph):
-        """Impact of a column should include measures/dimensions that use it."""
+        """Impact of a column should include measures/dimensions that depend on it."""
         # Find the 'amount' column in orders
         amount_cols = [n for n in graph.get_nodes_by_type(NodeType.Column) if "orders/amount" in n.id]
         if not amount_cols:
             pytest.skip("No amount column found in fixture")
-        graph.impact_of(amount_cols[0].id)
-        # Should be empty or contain only upstream references
-        # (columns are leaf nodes in forward direction — impact follows forward edges)
-        # Actually, columns are targets of AGGREGATES/READS, so impact_of (forward) from column
-        # won't find much. Let's test reverse impact instead:
-        # What impacts a column = what depends on it = reverse traversal from consumers
-        # The correct query: what uses this column? → nodes that have edges TO this column
-        consumers = graph.neighbors(amount_cols[0].id, direction="reverse")
-        consumer_types = {n.type for n in consumers}
-        assert consumer_types.issubset({NodeType.Measure, NodeType.Dimension, NodeType.Policy, NodeType.Classification})
+        impacted = graph.impact_of(amount_cols[0].id)
+        impacted_types = {n.type for n in impacted}
+        # amount column is aggregated by measures — they should appear in impact
+        assert NodeType.Measure in impacted_types, "impact_of(amount) should include Measures"
 
 
 # ── Invariant 8: PII gap detection ──

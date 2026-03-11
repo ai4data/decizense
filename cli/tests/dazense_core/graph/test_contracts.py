@@ -201,13 +201,13 @@ class TestDecisionTraceQueries:
 
     def test_contract_lineage_includes_full_trace(self, graph_with_contracts: GovernanceGraph):
         """Lineage from a contract should include tables, measures, rules it touched."""
-        downstream = graph_with_contracts.impact_of("contract:allow-001")
-        downstream_types = {n.type for n in downstream}
-        # Contract is a source node — impact goes to PolicyCheck, Table, Measure, Rule
-        assert NodeType.PolicyCheck in downstream_types
-        assert NodeType.Table in downstream_types
-        assert NodeType.Measure in downstream_types
-        assert NodeType.Rule in downstream_types
+        trace = graph_with_contracts.lineage_of("contract:allow-001")
+        trace_types = {n.type for n in trace}
+        # Contract edges point forward to what it touched: PolicyCheck, Table, Measure, Rule
+        assert NodeType.PolicyCheck in trace_types
+        assert NodeType.Table in trace_types
+        assert NodeType.Measure in trace_types
+        assert NodeType.Rule in trace_types
 
 
 # ── No contracts = no contract nodes ──

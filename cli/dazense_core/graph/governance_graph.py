@@ -340,12 +340,12 @@ class GovernanceGraph:
         return [self._nodes[nid] for nid in result if nid in self._nodes]
 
     def lineage_of(self, node_id: str) -> list[GraphNode]:
-        """Transitive upstream traversal."""
-        return self._traverse(node_id, "reverse")
+        """Transitive upstream traversal (follow edges forward: consumer → source)."""
+        return self._traverse(node_id, "forward")
 
     def impact_of(self, node_id: str) -> list[GraphNode]:
-        """Transitive downstream traversal."""
-        return self._traverse(node_id, "forward")
+        """Transitive downstream traversal (follow edges backward: what points to me)."""
+        return self._traverse(node_id, "reverse")
 
     def find_gaps(
         self,
@@ -584,20 +584,17 @@ class GovernanceGraph:
     # ── Internal ──
 
     def _traverse(self, start_id: str, direction: str) -> list[GraphNode]:
-        visited: set[str] = set()
+        visited: set[str] = {start_id}
         queue = [start_id]
         result: list[GraphNode] = []
 
         while queue:
             current = queue.pop(0)
-            if current in visited:
-                continue
-            visited.add(current)
-
             edges = self._forward.get(current, []) if direction == "forward" else self._reverse.get(current, [])
             for edge in edges:
                 neighbor_id = edge.to if direction == "forward" else edge.from_
                 if neighbor_id not in visited and neighbor_id in self._nodes:
+                    visited.add(neighbor_id)
                     result.append(self._nodes[neighbor_id])
                     queue.append(neighbor_id)
 
