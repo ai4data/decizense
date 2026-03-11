@@ -390,30 +390,31 @@ class GovernanceGraph:
 
         new_gaps: list[GapEntry] = []
 
-        # Check measures that lost rule governance
-        for measure in copy.get_nodes_by_type(NodeType.Measure):
-            inbound = copy._reverse.get(measure.id, [])
-            has_rule = any(
-                e.type == EdgeType.APPLIES_TO
-                and copy._nodes.get(e.from_, GraphNode(id="", type=NodeType.Bundle)).type == NodeType.Rule
-                for e in inbound
-            )
-            if not has_rule:
-                orig_inbound = self._reverse.get(measure.id, [])
-                was_governed = any(
+        # Check nodes that lost rule governance (measures, dimensions, models)
+        for node_type in (NodeType.Measure, NodeType.Dimension, NodeType.Model):
+            for node in copy.get_nodes_by_type(node_type):
+                inbound = copy._reverse.get(node.id, [])
+                has_rule = any(
                     e.type == EdgeType.APPLIES_TO
-                    and self._nodes.get(e.from_, GraphNode(id="", type=NodeType.Bundle)).type == NodeType.Rule
-                    for e in orig_inbound
+                    and copy._nodes.get(e.from_, GraphNode(id="", type=NodeType.Bundle)).type == NodeType.Rule
+                    for e in inbound
                 )
-                if was_governed:
-                    new_gaps.append(
-                        GapEntry(
-                            node_id=measure.id,
-                            node_type=NodeType.Measure,
-                            missing_edge=EdgeType.APPLIES_TO,
-                            description=f"{measure.id} loses governance",
-                        )
+                if not has_rule:
+                    orig_inbound = self._reverse.get(node.id, [])
+                    was_governed = any(
+                        e.type == EdgeType.APPLIES_TO
+                        and self._nodes.get(e.from_, GraphNode(id="", type=NodeType.Bundle)).type == NodeType.Rule
+                        for e in orig_inbound
                     )
+                    if was_governed:
+                        new_gaps.append(
+                            GapEntry(
+                                node_id=node.id,
+                                node_type=node_type,
+                                missing_edge=EdgeType.APPLIES_TO,
+                                description=f"{node.id} loses governance",
+                            )
+                        )
 
         # Check PII columns that lost BLOCKS
         orig_unblocked = {n.id for n in self.find_unblocked_pii_columns()}
@@ -676,14 +677,22 @@ def _find_nodes_matching(graph: GovernanceGraph, target: str) -> list[str]:
     matches: list[str] = []
 
     if "." in target:
+        # Try as model.measure (e.g., "orders.total_revenue")
         for node in graph.get_nodes_by_type(NodeType.Measure):
             if node.id.endswith(f"/{target}") or node.id.endswith(f".{target}"):
                 matches.append(node.id)
 
+        # Try as model.dimension (e.g., "customers.first_name")
+        for node in graph.get_nodes_by_type(NodeType.Dimension):
+            if node.id.endswith(f"/{target}") or node.id.endswith(f".{target}"):
+                matches.append(node.id)
+
+    # Try as model name (e.g., "orders")
     for node in graph.get_nodes_by_type(NodeType.Model):
         if node.id.endswith(f"/{target}"):
             matches.append(node.id)
 
+    # Fallback: try short name match on measures
     if not matches:
         for node in graph.get_nodes_by_type(NodeType.Measure):
             short_name = node.id.split(".")[-1]
