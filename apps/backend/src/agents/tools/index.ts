@@ -10,6 +10,10 @@ import displayChart from './display-chart';
 import executePython, { isPythonAvailable } from './execute-python';
 import executeSql from './execute-sql';
 import getBusinessContext from './get-business-context';
+import graphExplain from './graph-explain';
+import graphGaps from './graph-gaps';
+import graphImpact from './graph-impact';
+import graphLineage from './graph-lineage';
 import grep from './grep';
 import list from './list';
 import queryMetrics from './query-metrics';
@@ -30,6 +34,18 @@ function hasBusinessRules(): boolean {
 function hasPolicies(): boolean {
 	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
 	return !!projectFolder && existsSync(join(projectFolder, 'policies', 'policy.yml'));
+}
+
+function hasGovernanceGraph(): boolean {
+	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
+	if (!projectFolder) {
+		return false;
+	}
+	return (
+		existsSync(join(projectFolder, 'semantics', 'semantic_model.yml')) ||
+		existsSync(join(projectFolder, 'policies', 'policy.yml')) ||
+		existsSync(join(projectFolder, 'semantics', 'business_rules.yml'))
+	);
 }
 
 export const tools = {
@@ -58,5 +74,11 @@ export const getTools = (agentSettings: AgentSettings | null) => {
 		...(hasBusinessRules() && { get_business_context: getBusinessContext }),
 		...(hasBusinessRules() && { classify }),
 		...(hasPolicies() && { build_contract: buildContract }),
+		...(hasGovernanceGraph() && {
+			graph_explain: graphExplain,
+			graph_gaps: graphGaps,
+			graph_impact: graphImpact,
+			graph_lineage: graphLineage,
+		}),
 	};
 };

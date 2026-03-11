@@ -173,9 +173,10 @@ Example payload:
 
 ```json
 {
-  "customer_id": "C101",
-  "flight_id": "F1001"
+	"customer_id": "C101",
+	"flight_id": "F1001"
 }
+```
 
 The event log becomes the foundation for process mining and operational analysis.
 
@@ -186,16 +187,16 @@ The simulator continuously produces events.
 The data flow looks like this:
 
 Simulator
-   │
-   ▼
+│
+▼
 Event Stream
-   │
-   ▼
+│
+▼
 PostgreSQL (events table)
-   │
-   ├── update operational tables
-   │
-   └── feed process mining
+│
+├── update operational tables
+│
+└── feed process mining
 
 Example flow:
 
@@ -282,11 +283,11 @@ The AI agent interacts with the enterprise environment through the semantic laye
 Architecture:
 
 User
- ↓
+↓
 AI Agent
- ↓
+↓
 Semantic Layer
- ↓
+↓
 PostgreSQL Database
 
 Example user question:
@@ -318,27 +319,27 @@ This enables reliable reasoning over enterprise operations.
 The full architecture looks like this:
 
 Simulation Engine
-      │
-      ▼
+│
+▼
 Event Generation
-      │
-      ▼
+│
+▼
 Event Log (PostgreSQL)
-      │
-      ├── Update Operational Tables
-      │
-      ├── Feed Context Graph
-      │
-      └── Feed Process Mining
-               │
-               ▼
-        Process Insights
-               │
-               ▼
-          AI Agent
-               │
-               ▼
-             Users
+│
+├── Update Operational Tables
+│
+├── Feed Context Graph
+│
+└── Feed Process Mining
+│
+▼
+Process Insights
+│
+▼
+AI Agent
+│
+▼
+Users
 
 This architecture integrates:
 
@@ -371,8 +372,7 @@ AI agents can then answer questions such as:
 
 Which flights are delayed today?
 Which passengers will miss connections?
-Which routes have the highest demand?
-11. Why This Architecture Matters
+Which routes have the highest demand? 11. Why This Architecture Matters
 
 This architecture reflects the emerging structure of next-generation enterprise AI systems.
 
@@ -387,4 +387,14 @@ semantic context graphs
 process intelligence
 
 AI reasoning
-```
+
+---
+
+12. Alignment with Dazense Delivery Docs
+
+This architecture document is the structural blueprint. Execution sequencing and scope are defined in companion docs:
+
+- Governance/control plane baseline: `docs/trusted-analytics-copilot-implementation_plan.md`
+- Travel scenario and entities: `docs/prd-flight-travel.md`
+- Disruption requirements: `docs/prd-flight-travel-disturbtion.md`
+- MVP execution plan (dedicated experiment worktree): `docs/digital-twin-mvp-plan.md`

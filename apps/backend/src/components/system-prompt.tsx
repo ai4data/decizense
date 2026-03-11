@@ -1,3 +1,6 @@
+import { existsSync } from 'fs';
+import { join } from 'path';
+
 import {
 	getBusinessRules,
 	getClassifications,
@@ -7,6 +10,7 @@ import {
 	getSemanticModels,
 	getUserRules,
 } from '../agents/user-rules';
+import { env } from '../env';
 import { Block, Bold, Br, Italic, Link, List, ListItem, Span, Title } from '../lib/markdown';
 
 export function SystemPrompt() {
@@ -17,6 +21,13 @@ export function SystemPrompt() {
 	const classifications = getClassifications();
 	const policies = getPolicies();
 	const bundles = getDatasetBundles();
+
+	const projectFolder = env.DAZENSE_DEFAULT_PROJECT_PATH;
+	const hasGraph =
+		!!projectFolder &&
+		(existsSync(join(projectFolder, 'semantics', 'semantic_model.yml')) ||
+			existsSync(join(projectFolder, 'policies', 'policy.yml')) ||
+			existsSync(join(projectFolder, 'semantics', 'business_rules.yml')));
 
 	return (
 		<Block>
@@ -247,6 +258,39 @@ export function SystemPrompt() {
 							</ListItem>
 						))}
 					</List>
+				</Block>
+			)}
+			{hasGraph && (
+				<Block>
+					<Title level={2}>Governance Graph</Title>
+					<Span>
+						A governance graph is available that maps relationships between tables, columns, semantic
+						models, measures, dimensions, classifications, business rules, and policies. Use the graph tools
+						to answer governance and lineage questions:
+					</Span>
+					<List>
+						<ListItem>
+							<Bold>graph_explain</Bold>: Explain what an entity is, its properties, classifications,
+							rules, and relationships. Use for "tell me about X" or "why is X blocked?" questions.
+						</ListItem>
+						<ListItem>
+							<Bold>graph_lineage</Bold>: Trace upstream dependencies. Use for "what does this metric
+							depend on?" questions.
+						</ListItem>
+						<ListItem>
+							<Bold>graph_impact</Bold>: Measure downstream impact. Use for "what breaks if X changes?"
+							questions.
+						</ListItem>
+						<ListItem>
+							<Bold>graph_gaps</Bold>: Find governance coverage gaps — PII columns without policies,
+							tables without models, measures without rules. Use for "where are we missing governance?"
+							questions.
+						</ListItem>
+					</List>
+					<Span>
+						Entity IDs can be short names (e.g., "orders", "total_revenue") or full canonical IDs (e.g.,
+						"measure:jaffle_shop/orders.total_revenue"). The tools resolve short names automatically.
+					</Span>
 				</Block>
 			)}
 		</Block>

@@ -27,6 +27,10 @@ tables:
   - name: number_of_orders
     data_type: BIGINT
     description: Total number of orders
+  - name: email
+    data_type: VARCHAR
+    description: Customer email address
+    tags: ["PII.Email"]
   - name: customer_lifetime_value
     data_type: DOUBLE
     description: Sum of all order amounts

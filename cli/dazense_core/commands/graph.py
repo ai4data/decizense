@@ -161,8 +161,17 @@ def gaps(
         dazense graph gaps --check models
         dazense graph gaps --check rules
     """
+    from dazense_core.graph.catalog import OpenMetadataCatalogProvider
+
     console.print("\n[bold cyan]dazense graph gaps[/bold cyan]\n")
     g = _compile(project_path)
+
+    # Auto-enrich from catalogs so gap analysis includes catalog-discovered PII
+    base = Path(project_path) if project_path else Path.cwd()
+    om_dir = base / "openmetadata"
+    if om_dir.exists():
+        g.enrich_from_catalog(OpenMetadataCatalogProvider(), om_dir)
+
     check_type = check or "all"
     total_gaps = 0
 
