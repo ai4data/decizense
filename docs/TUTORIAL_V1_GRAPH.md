@@ -194,19 +194,35 @@ This checks three areas:
 | `--check models` | Tables without a semantic model (orphan tables)     |
 | `--check rules`  | Measures without any business rule                  |
 
-If your governance is complete, you'll see:
+For the Jaffle Shop example, you'll see:
 
 ```
 dazense graph gaps
 
-No coverage gaps found
+Ungoverned measures (10) — no business rule:
+  • measure:jaffle_shop/customers.customer_count
+  • measure:jaffle_shop/customers.customer_count_distinct
+  • measure:jaffle_shop/customers.avg_orders_per_customer
+  • measure:jaffle_shop/customers.max_lifetime_value
+  • measure:jaffle_shop/orders.order_count
+  • measure:jaffle_shop/orders.min_order_value
+  • measure:jaffle_shop/orders.max_order_value
+  • measure:jaffle_shop/payments.payment_count
+  • measure:jaffle_shop/payments.total_payment_amount
+  • measure:jaffle_shop/payments.avg_payment_amount
+
+10 total gap(s) found
 ```
 
-To check a specific area:
+10 out of 14 measures have no business rule — the AI agent has zero guidance
+on how to compute or interpret them. For example, should `order_count` include
+returned orders? No rule says.
+
+The good news: no PII gaps and no orphan tables. Check specific areas with:
 
 ```powershell
-dazense graph gaps --check pii -p example
-dazense graph gaps --check rules -p example
+dazense graph gaps --check pii -p example    # No PII gaps found
+dazense graph gaps --check rules -p example  # 10 ungoverned measures
 ```
 
 **Why this matters**: Gaps mean your governance has blind spots. A measure
@@ -231,19 +247,20 @@ dazense graph simulate
 
 Removed: rule:exclude_returned_orders_from_revenue
 
-┌──────────────────────────────────────────────┬─────────┬──────────────┬─────────────┐
-│ Node                                         │ Type    │ Missing Edge │ Description │
-├──────────────────────────────────────────────┼─────────┼──────────────┼─────────────┤
-│ measure:jaffle_shop/orders.total_revenue     │ Measure │ APPLIES_TO   │ ...         │
-│ measure:jaffle_shop/orders.avg_order_value   │ Measure │ APPLIES_TO   │ ...         │
-│ measure:jaffle_shop/orders.credit_card_rev...│ Measure │ APPLIES_TO   │ ...         │
-│ ...                                          │         │              │             │
-└──────────────────────────────────────────────┴─────────┴──────────────┴─────────────┘
+┌──────────────────────────────────────────────────────┬─────────┬──────────────┬──────────────────────────────────────────────────────────┐
+│ Node                                                 │ Type    │ Missing Edge │ Description                                              │
+├──────────────────────────────────────────────────────┼─────────┼──────────────┼──────────────────────────────────────────────────────────┤
+│ measure:jaffle_shop/orders.total_revenue             │ Measure │ APPLIES_TO   │ measure:jaffle_shop/orders.total_revenue loses governance │
+│ measure:jaffle_shop/orders.avg_order_value           │ Measure │ APPLIES_TO   │ measure:jaffle_shop/orders.avg_order_value loses governa… │
+│ measure:jaffle_shop/orders.credit_card_revenue       │ Measure │ APPLIES_TO   │ ...                                                      │
+│ measure:jaffle_shop/orders.coupon_revenue            │ Measure │ APPLIES_TO   │ ...                                                      │
+│ measure:jaffle_shop/orders.bank_transfer_revenue     │ Measure │ APPLIES_TO   │ ...                                                      │
+└──────────────────────────────────────────────────────┴─────────┴──────────────┴──────────────────────────────────────────────────────────┘
 
-6 new gap(s) would be created
+5 new gap(s) would be created
 ```
 
-**What this tells you**: Removing that one rule would leave 6 revenue measures
+**What this tells you**: Removing that one rule would leave 5 revenue measures
 without business rule governance. The AI agent would lose the instruction to
 exclude returned orders from revenue calculations.
 
@@ -252,6 +269,24 @@ Simulate removing multiple rules:
 ```powershell
 dazense graph simulate --remove rule:pii_customer_names --remove rule:orders_require_time_filter -p example
 ```
+
+Expected output:
+
+```
+Removed: rule:pii_customer_names, rule:orders_require_time_filter
+
+┌────────────────────────────────────────────┬───────────┬──────────────┬─────────────────────────────────────────────────────────┐
+│ Node                                       │ Type      │ Missing Edge │ Description                                             │
+├────────────────────────────────────────────┼───────────┼──────────────┼─────────────────────────────────────────────────────────┤
+│ dim:jaffle_shop/customers.first_name       │ Dimension │ APPLIES_TO   │ dim:jaffle_shop/customers.first_name loses governance   │
+│ dim:jaffle_shop/customers.last_name        │ Dimension │ APPLIES_TO   │ dim:jaffle_shop/customers.last_name loses governance    │
+└────────────────────────────────────────────┴───────────┴──────────────┴─────────────────────────────────────────────────────────┘
+
+2 new gap(s) would be created
+```
+
+Removing `pii_customer_names` leaves the `first_name` and `last_name`
+dimensions without governance — the PII rule was their only business rule.
 
 ---
 
@@ -294,24 +329,61 @@ enforcement test. Add these to your `dataset.yaml` to close the loop.
 ## Step 7: Enrich with OpenMetadata (optional)
 
 If you have an OpenMetadata instance running, you can enrich the graph with
-discovered metadata:
+discovered metadata.
 
-```powershell
-# Step 1: Sync metadata from OpenMetadata
-dazense sync -p openmetadata --project-path example
+### Configure OpenMetadata in your project
 
-# Step 2: Enrich the graph
-dazense graph enrich -p example
+Add an `openmetadata` section to `dazense_config.yaml` to scope the sync
+to specific services — this prevents pulling all tables from a production
+OM instance:
+
+```yaml
+# dazense_config.yaml
+openmetadata:
+    url: http://localhost:8585
+    services: [jaffle_shop_postgres] # only sync these services
 ```
 
-Expected output:
+| Field      | Description                                                |
+| ---------- | ---------------------------------------------------------- |
+| `url`      | OpenMetadata server URL (default: `http://localhost:8585`) |
+| `email`    | Login email (default: `admin@open-metadata.org`)           |
+| `password` | Login password (default: `admin`)                          |
+| `services` | List of service names to sync (empty = all services)       |
+
+### Sync and enrich
+
+```powershell
+# Navigate to the project directory
+cd C:\Users\hzmarrou\OneDrive\python\learning\dazense\example
+
+# Step 1: Sync metadata from OpenMetadata
+dazense sync -p openmetadata
+
+# Step 2: Enrich the graph
+dazense graph enrich
+```
+
+Sync output:
+
+```
+🔍  Syncing OpenMetadata
+Server: http://localhost:8585
+Services: jaffle_shop_postgres
+Location: .../example/openmetadata
+
+Service: jaffle_shop_postgres
+  ✓ jaffle_shop.main: 8 tables
+```
+
+Enrichment output:
 
 ```
 dazense graph enrich
 
 Enrichment complete:
-  Nodes: 52 -> 55 (+3)
-  Edges: 108 -> 114 (+6)
+  Nodes: 77 → 80 (+3)
+  Edges: 100 → 106 (+6)
   Actions: 25
 
   Enriched: 20 existing nodes
@@ -327,6 +399,10 @@ The enrichment:
 - Adds descriptions from the OM catalog
 - Discovers columns that exist in the database but aren't in your semantic model
 - Creates `DISCOVERED_BY` edges for provenance tracking
+
+Without the `services` filter, `dazense sync -p openmetadata` would pull
+**all** tables from every service in your OM instance. The config keeps
+the sync scoped to what's relevant for your project.
 
 ---
 
