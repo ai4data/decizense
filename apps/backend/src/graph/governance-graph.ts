@@ -64,14 +64,14 @@ export class GovernanceGraph {
 		return [...result].map((nid) => this.nodes.get(nid)!).filter(Boolean);
 	}
 
-	/** Transitive upstream traversal (follow reverse edges). */
+	/** Transitive upstream traversal (follow forward edges — edges point from parent to child). */
 	lineageOf(id: string): GraphNode[] {
-		return this.traverse(id, 'reverse');
+		return this.traverse(id, 'forward');
 	}
 
-	/** Transitive downstream traversal (follow forward edges). */
+	/** Transitive downstream traversal (follow reverse edges — find who depends on me). */
 	impactOf(id: string): GraphNode[] {
-		return this.traverse(id, 'forward');
+		return this.traverse(id, 'reverse');
 	}
 
 	/**

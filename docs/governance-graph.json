@@ -1,0 +1,1192 @@
+{
+	"nodes": [
+		{
+			"id": "bundle:jaffle_shop",
+			"type": "Bundle",
+			"properties": {
+				"display_name": "Jaffle Shop \u00e2\u20ac\u201d Core Analytics",
+				"certification": "certified",
+				"owners": [
+					{
+						"name": "Data Team"
+					}
+				]
+			}
+		},
+		{
+			"id": "table:duckdb-jaffle-shop/main.customers",
+			"type": "Table",
+			"properties": {
+				"schema": "main",
+				"table": "customers",
+				"database_type": "duckdb",
+				"database_id": "duckdb-jaffle-shop"
+			}
+		},
+		{
+			"id": "table:duckdb-jaffle-shop/main.orders",
+			"type": "Table",
+			"properties": {
+				"schema": "main",
+				"table": "orders",
+				"database_type": "duckdb",
+				"database_id": "duckdb-jaffle-shop"
+			}
+		},
+		{
+			"id": "table:duckdb-jaffle-shop/main.stg_payments",
+			"type": "Table",
+			"properties": {
+				"schema": "main",
+				"table": "stg_payments",
+				"database_type": "duckdb",
+				"database_id": "duckdb-jaffle-shop"
+			}
+		},
+		{
+			"id": "join:jaffle_shop/main.orders:main.customers",
+			"type": "JoinEdge",
+			"properties": {
+				"join_type": "many_to_one",
+				"description": "Orders \u00e2\u2020\u2019 Customers (each order belongs to one customer)",
+				"left_column": "customer_id",
+				"right_column": "customer_id"
+			}
+		},
+		{
+			"id": "join:jaffle_shop/main.stg_payments:main.orders",
+			"type": "JoinEdge",
+			"properties": {
+				"join_type": "many_to_one",
+				"description": "Payments \u00e2\u2020\u2019 Orders (each payment belongs to one order; orders can have split payments)",
+				"left_column": "order_id",
+				"right_column": "order_id"
+			}
+		},
+		{
+			"id": "model:jaffle_shop/customers",
+			"type": "Model",
+			"properties": {
+				"table": "customers",
+				"primary_key": "customer_id",
+				"time_dimension": null,
+				"description": ""
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.customer_id",
+			"type": "Dimension",
+			"properties": {
+				"column": "customer_id",
+				"description": "Unique identifier for each customer"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/customer_id",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.first_name",
+			"type": "Dimension",
+			"properties": {
+				"column": "first_name",
+				"description": "Customer's first name (PII)"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/first_name",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": true
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.last_name",
+			"type": "Dimension",
+			"properties": {
+				"column": "last_name",
+				"description": "Customer's last name (PII)"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/last_name",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": true
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.first_order",
+			"type": "Dimension",
+			"properties": {
+				"column": "first_order",
+				"description": "Date (UTC) of the customer's first order"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/first_order",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.most_recent_order",
+			"type": "Dimension",
+			"properties": {
+				"column": "most_recent_order",
+				"description": "Date (UTC) of the customer's most recent order"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/most_recent_order",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.number_of_orders",
+			"type": "Dimension",
+			"properties": {
+				"column": "number_of_orders",
+				"description": "Count of orders placed by the customer"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/number_of_orders",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/customers.customer_lifetime_value",
+			"type": "Dimension",
+			"properties": {
+				"column": "customer_lifetime_value",
+				"description": "Total value (AUD) of the customer's orders"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/customer_lifetime_value",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.customer_count",
+			"type": "Measure",
+			"properties": {
+				"type": "count",
+				"column": null,
+				"description": "Total number of customers"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.customers/customer_count",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.customer_count_distinct",
+			"type": "Measure",
+			"properties": {
+				"type": "count_distinct",
+				"column": "customer_id",
+				"description": "Distinct customer count (useful in joins)"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.total_lifetime_value",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "customer_lifetime_value",
+				"description": "Sum of all customer lifetime values"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.avg_lifetime_value",
+			"type": "Measure",
+			"properties": {
+				"type": "avg",
+				"column": "customer_lifetime_value",
+				"description": "Average customer lifetime value"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.avg_orders_per_customer",
+			"type": "Measure",
+			"properties": {
+				"type": "avg",
+				"column": "number_of_orders",
+				"description": "Average number of orders per customer"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/customers.max_lifetime_value",
+			"type": "Measure",
+			"properties": {
+				"type": "max",
+				"column": "customer_lifetime_value",
+				"description": "Highest single-customer lifetime value"
+			}
+		},
+		{
+			"id": "model:jaffle_shop/orders",
+			"type": "Model",
+			"properties": {
+				"table": "orders",
+				"primary_key": "order_id",
+				"time_dimension": "order_date",
+				"description": ""
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/orders.order_id",
+			"type": "Dimension",
+			"properties": {
+				"column": "order_id",
+				"description": "Unique identifier for each order"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/order_id",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/orders.customer_id",
+			"type": "Dimension",
+			"properties": {
+				"column": "customer_id",
+				"description": "Foreign key to customers table"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/customer_id",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/orders.order_date",
+			"type": "Dimension",
+			"properties": {
+				"column": "order_date",
+				"description": "Date (UTC) the order was placed"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/order_date",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/orders.status",
+			"type": "Dimension",
+			"properties": {
+				"column": "status",
+				"description": "Order fulfillment status. Accepted values: placed (not yet left warehouse), shipped (in transit), completed (received by customer), return_pending (return requested, not yet received), returned (received back at warehouse).\n"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/status",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.order_count",
+			"type": "Measure",
+			"properties": {
+				"type": "count",
+				"column": null,
+				"description": "Total number of orders"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/order_count",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.total_revenue",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "amount",
+				"description": "Net revenue in AUD \u00e2\u20ac\u201d automatically excludes returned and return_pending orders."
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.avg_order_value",
+			"type": "Measure",
+			"properties": {
+				"type": "avg",
+				"column": "amount",
+				"description": "Average order value in AUD"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.min_order_value",
+			"type": "Measure",
+			"properties": {
+				"type": "min",
+				"column": "amount",
+				"description": "Smallest order amount in AUD"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.max_order_value",
+			"type": "Measure",
+			"properties": {
+				"type": "max",
+				"column": "amount",
+				"description": "Largest order amount in AUD"
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.credit_card_revenue",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "credit_card_amount",
+				"description": "Total amount (AUD) paid via credit card"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/credit_card_amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.coupon_revenue",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "coupon_amount",
+				"description": "Total amount (AUD) paid via coupons"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/coupon_amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.bank_transfer_revenue",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "bank_transfer_amount",
+				"description": "Total amount (AUD) paid via bank transfer"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/bank_transfer_amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/orders.gift_card_revenue",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "gift_card_amount",
+				"description": "Total amount (AUD) paid via gift cards"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.orders/gift_card_amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "model:jaffle_shop/payments",
+			"type": "Model",
+			"properties": {
+				"table": "stg_payments",
+				"primary_key": "payment_id",
+				"time_dimension": null,
+				"description": ""
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/payments.payment_id",
+			"type": "Dimension",
+			"properties": {
+				"column": "payment_id",
+				"description": "Unique identifier for each payment"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.stg_payments/payment_id",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/payments.order_id",
+			"type": "Dimension",
+			"properties": {
+				"column": "order_id",
+				"description": "Foreign key to orders table"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.stg_payments/order_id",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "dim:jaffle_shop/payments.payment_method",
+			"type": "Dimension",
+			"properties": {
+				"column": "payment_method",
+				"description": "Payment instrument used. Accepted values: credit_card, bank_transfer, coupon, gift_card."
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.stg_payments/payment_method",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/payments.payment_count",
+			"type": "Measure",
+			"properties": {
+				"type": "count",
+				"column": null,
+				"description": "Total number of payment transactions"
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.stg_payments/payment_count",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/payments.total_payment_amount",
+			"type": "Measure",
+			"properties": {
+				"type": "sum",
+				"column": "amount",
+				"description": "Total amount (AUD) across all payment transactions. Amounts are converted from cents to dollars in staging."
+			}
+		},
+		{
+			"id": "column:duckdb-jaffle-shop/main.stg_payments/amount",
+			"type": "Column",
+			"properties": {
+				"data_type": "unknown",
+				"is_pii": false
+			}
+		},
+		{
+			"id": "measure:jaffle_shop/payments.avg_payment_amount",
+			"type": "Measure",
+			"properties": {
+				"type": "avg",
+				"column": "amount",
+				"description": "Average payment transaction amount in AUD"
+			}
+		},
+		{
+			"id": "rule:exclude_returned_orders_from_revenue",
+			"type": "Rule",
+			"properties": {
+				"category": "metrics",
+				"severity": "critical",
+				"guidance": "Always add WHERE status NOT IN ('returned', 'return_pending') when computing revenue, average order value, or payment method breakdowns. Only 'completed', 'shipped', and 'placed' orders represent real revenue.\n",
+				"description": "Revenue metrics must exclude returned and return_pending orders."
+			}
+		},
+		{
+			"id": "rule:order_amount_equals_payment_sum",
+			"type": "Rule",
+			"properties": {
+				"category": "data_quality",
+				"severity": "critical",
+				"guidance": "If you see a discrepancy between the order amount and the sum of payment columns, flag it as a data quality issue. Do not attempt to reconcile manually.\n",
+				"description": "Order amount must equal the sum of its payment method amounts: credit_card_amount + coupon_amount + bank_transfer_amount + gift_card_amount = amount."
+			}
+		},
+		{
+			"id": "rule:net_revenue_definition",
+			"type": "Rule",
+			"properties": {
+				"category": "metrics",
+				"severity": "warning",
+				"guidance": "When the user asks for \"revenue\" without qualification, default to net revenue (exclude returned/return_pending). Only use gross revenue when explicitly asked.\n",
+				"description": "\"Net revenue\" means total_revenue minus returned orders. \"Gross revenue\" includes all orders regardless of status.\n"
+			}
+		},
+		{
+			"id": "rule:customer_type_classification",
+			"type": "Rule",
+			"properties": {
+				"category": "metrics",
+				"severity": "warning",
+				"guidance": "When segmenting customers, use: CASE WHEN number_of_orders > 1 THEN 'returning' ELSE 'new' END. 71% of customers in this dataset are new, 29% are returning.\n",
+				"description": "Customers are classified as \"new\" (1 order) or \"returning\" (2+ orders). Use number_of_orders to determine this.\n"
+			}
+		},
+		{
+			"id": "rule:lifetime_value_consistency",
+			"type": "Rule",
+			"properties": {
+				"category": "data_quality",
+				"severity": "critical",
+				"guidance": "If a user asks for both customer LTV and order-level revenue, ensure the totals are consistent. Use the customers table for per-customer LTV and orders for order-level breakdowns.\n",
+				"description": "customer_lifetime_value should equal the sum of order amounts for that customer. Cross-check when presenting LTV alongside order-level totals.\n"
+			}
+		},
+		{
+			"id": "rule:pii_customer_names",
+			"type": "Rule",
+			"properties": {
+				"category": "privacy",
+				"severity": "critical",
+				"guidance": "Never include first_name or last_name in query results unless the user explicitly requests individual customer records. For aggregate analysis, group by customer_id or customer segments instead. The policy engine will block these columns in strict mode.\n",
+				"description": "first_name and last_name are personally identifiable information (PII)."
+			}
+		},
+		{
+			"id": "rule:orders_require_time_filter",
+			"type": "Rule",
+			"properties": {
+				"category": "query_patterns",
+				"severity": "warning",
+				"guidance": "When a user asks about \"recent\" or \"last month\" orders, translate to an explicit date range on order_date. The policy engine enforces this in strict mode.\n",
+				"description": "The orders table is a fact table spanning 2018-01-01 to 2018-04-09. Always apply a time filter on order_date for bounded queries.\n"
+			}
+		},
+		{
+			"id": "rule:payment_method_breakdown",
+			"type": "Rule",
+			"properties": {
+				"category": "query_patterns",
+				"severity": "info",
+				"guidance": "For payment method breakdown by order, use the orders table columns directly (faster, one row per order). For transaction-level analysis or counting payment transactions, use the stg_payments table joined to orders.\n",
+				"description": "Payment data exists at two granularities: (1) orders table has pre-aggregated payment columns (credit_card_amount, coupon_amount, etc.), (2) stg_payments has individual payment rows with payment_method dimension.\n"
+			}
+		},
+		{
+			"id": "rule:split_payments",
+			"type": "Rule",
+			"properties": {
+				"category": "data_quality",
+				"severity": "info",
+				"guidance": "When counting \"orders paid by credit card\", use orders WHERE credit_card_amount > 0 rather than counting distinct order_ids in stg_payments, as an order can use multiple payment methods.\n",
+				"description": "Some orders have split payments across multiple methods. There are 113 payment transactions for 99 orders, meaning ~14 orders have split payments.\n"
+			}
+		},
+		{
+			"id": "rule:order_status_definitions",
+			"type": "Rule",
+			"properties": {
+				"category": "domain",
+				"severity": "info",
+				"guidance": "For fulfillment analysis: active pipeline = placed + shipped. Completed = successfully delivered. Problem orders = returned + return_pending. Completion rate = completed / (completed + returned + return_pending).\n",
+				"description": "Order statuses and their meanings: placed (order received, not yet shipped), shipped (in transit), completed (delivered), returned (customer returned the order), return_pending (return requested, not yet processed).\n"
+			}
+		},
+		{
+			"id": "class:PII",
+			"type": "Classification",
+			"properties": {
+				"description": "Personally identifiable information \u00e2\u20ac\u201d names, emails, phone numbers",
+				"tags": ["sensitive", "restricted"]
+			}
+		},
+		{
+			"id": "class:Financial",
+			"type": "Classification",
+			"properties": {
+				"description": "Monetary values that require careful aggregation",
+				"tags": ["financial"]
+			}
+		},
+		{
+			"id": "policy:root",
+			"type": "Policy",
+			"properties": {
+				"pii_mode": "block",
+				"max_rows": 200,
+				"require_contract": false
+			}
+		}
+	],
+	"edges": [
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "table:duckdb-jaffle-shop/main.customers",
+			"type": "CONTAINS"
+		},
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "table:duckdb-jaffle-shop/main.orders",
+			"type": "CONTAINS"
+		},
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "table:duckdb-jaffle-shop/main.stg_payments",
+			"type": "CONTAINS"
+		},
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "table:duckdb-jaffle-shop/main.orders",
+			"type": "REQUIRES_TIME_FILTER"
+		},
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "join:jaffle_shop/main.orders:main.customers",
+			"type": "ALLOWS_JOIN"
+		},
+		{
+			"from": "bundle:jaffle_shop",
+			"to": "join:jaffle_shop/main.stg_payments:main.orders",
+			"type": "ALLOWS_JOIN"
+		},
+		{
+			"from": "join:jaffle_shop/main.orders:main.customers",
+			"to": "table:duckdb-jaffle-shop/main.orders",
+			"type": "JOIN_LEFT"
+		},
+		{
+			"from": "join:jaffle_shop/main.orders:main.customers",
+			"to": "table:duckdb-jaffle-shop/main.customers",
+			"type": "JOIN_RIGHT"
+		},
+		{
+			"from": "join:jaffle_shop/main.stg_payments:main.orders",
+			"to": "table:duckdb-jaffle-shop/main.stg_payments",
+			"type": "JOIN_LEFT"
+		},
+		{
+			"from": "join:jaffle_shop/main.stg_payments:main.orders",
+			"to": "table:duckdb-jaffle-shop/main.orders",
+			"type": "JOIN_RIGHT"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "table:duckdb-jaffle-shop/main.customers",
+			"type": "WRAPS"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.customer_id",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.first_name",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.last_name",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.first_order",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.most_recent_order",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.number_of_orders",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "dim:jaffle_shop/customers.customer_lifetime_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.customer_count",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.customer_count_distinct",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.total_lifetime_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.avg_lifetime_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.avg_orders_per_customer",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/customers",
+			"to": "measure:jaffle_shop/customers.max_lifetime_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.customer_id",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_id",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.first_name",
+			"to": "column:duckdb-jaffle-shop/main.customers/first_name",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.last_name",
+			"to": "column:duckdb-jaffle-shop/main.customers/last_name",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.first_order",
+			"to": "column:duckdb-jaffle-shop/main.customers/first_order",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.most_recent_order",
+			"to": "column:duckdb-jaffle-shop/main.customers/most_recent_order",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.number_of_orders",
+			"to": "column:duckdb-jaffle-shop/main.customers/number_of_orders",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/customers.customer_lifetime_value",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_lifetime_value",
+			"type": "READS"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.customer_count",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_count",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.customer_count_distinct",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_id",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.total_lifetime_value",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_lifetime_value",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.avg_lifetime_value",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_lifetime_value",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.avg_orders_per_customer",
+			"to": "column:duckdb-jaffle-shop/main.customers/number_of_orders",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/customers.max_lifetime_value",
+			"to": "column:duckdb-jaffle-shop/main.customers/customer_lifetime_value",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "table:duckdb-jaffle-shop/main.orders",
+			"type": "WRAPS"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "dim:jaffle_shop/orders.order_id",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "dim:jaffle_shop/orders.customer_id",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "dim:jaffle_shop/orders.order_date",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "dim:jaffle_shop/orders.status",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.order_count",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.total_revenue",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.avg_order_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.min_order_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.max_order_value",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.credit_card_revenue",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.coupon_revenue",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.bank_transfer_revenue",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "measure:jaffle_shop/orders.gift_card_revenue",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/orders",
+			"to": "model:jaffle_shop/customers",
+			"type": "JOINS_WITH"
+		},
+		{
+			"from": "dim:jaffle_shop/orders.order_id",
+			"to": "column:duckdb-jaffle-shop/main.orders/order_id",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/orders.customer_id",
+			"to": "column:duckdb-jaffle-shop/main.orders/customer_id",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/orders.order_date",
+			"to": "column:duckdb-jaffle-shop/main.orders/order_date",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/orders.status",
+			"to": "column:duckdb-jaffle-shop/main.orders/status",
+			"type": "READS"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.order_count",
+			"to": "column:duckdb-jaffle-shop/main.orders/order_count",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.total_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.total_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/status",
+			"type": "FILTERS_ON"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.avg_order_value",
+			"to": "column:duckdb-jaffle-shop/main.orders/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.min_order_value",
+			"to": "column:duckdb-jaffle-shop/main.orders/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.max_order_value",
+			"to": "column:duckdb-jaffle-shop/main.orders/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.credit_card_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/credit_card_amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.coupon_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/coupon_amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.bank_transfer_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/bank_transfer_amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/orders.gift_card_revenue",
+			"to": "column:duckdb-jaffle-shop/main.orders/gift_card_amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "table:duckdb-jaffle-shop/main.stg_payments",
+			"type": "WRAPS"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "dim:jaffle_shop/payments.payment_id",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "dim:jaffle_shop/payments.order_id",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "dim:jaffle_shop/payments.payment_method",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "measure:jaffle_shop/payments.payment_count",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "measure:jaffle_shop/payments.total_payment_amount",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "measure:jaffle_shop/payments.avg_payment_amount",
+			"type": "DEFINES"
+		},
+		{
+			"from": "model:jaffle_shop/payments",
+			"to": "model:jaffle_shop/orders",
+			"type": "JOINS_WITH"
+		},
+		{
+			"from": "dim:jaffle_shop/payments.payment_id",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/payment_id",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/payments.order_id",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/order_id",
+			"type": "READS"
+		},
+		{
+			"from": "dim:jaffle_shop/payments.payment_method",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/payment_method",
+			"type": "READS"
+		},
+		{
+			"from": "measure:jaffle_shop/payments.payment_count",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/payment_count",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/payments.total_payment_amount",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "measure:jaffle_shop/payments.avg_payment_amount",
+			"to": "column:duckdb-jaffle-shop/main.stg_payments/amount",
+			"type": "AGGREGATES"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.total_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.avg_order_value",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.credit_card_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.coupon_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.bank_transfer_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:exclude_returned_orders_from_revenue",
+			"to": "measure:jaffle_shop/orders.gift_card_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:order_amount_equals_payment_sum",
+			"to": "model:jaffle_shop/orders",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:net_revenue_definition",
+			"to": "measure:jaffle_shop/orders.total_revenue",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:customer_type_classification",
+			"to": "model:jaffle_shop/customers",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:lifetime_value_consistency",
+			"to": "measure:jaffle_shop/customers.total_lifetime_value",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:lifetime_value_consistency",
+			"to": "measure:jaffle_shop/customers.avg_lifetime_value",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:pii_customer_names",
+			"to": "dim:jaffle_shop/customers.first_name",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:pii_customer_names",
+			"to": "dim:jaffle_shop/customers.last_name",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:orders_require_time_filter",
+			"to": "model:jaffle_shop/orders",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:payment_method_breakdown",
+			"to": "model:jaffle_shop/orders",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:payment_method_breakdown",
+			"to": "model:jaffle_shop/payments",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:split_payments",
+			"to": "model:jaffle_shop/payments",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "rule:order_status_definitions",
+			"to": "model:jaffle_shop/orders",
+			"type": "APPLIES_TO"
+		},
+		{
+			"from": "policy:root",
+			"to": "column:duckdb-jaffle-shop/main.customers/first_name",
+			"type": "BLOCKS"
+		},
+		{
+			"from": "policy:root",
+			"to": "column:duckdb-jaffle-shop/main.customers/last_name",
+			"type": "BLOCKS"
+		},
+		{
+			"from": "class:PII",
+			"to": "column:duckdb-jaffle-shop/main.customers/first_name",
+			"type": "CLASSIFIES"
+		},
+		{
+			"from": "class:PII",
+			"to": "column:duckdb-jaffle-shop/main.customers/last_name",
+			"type": "CLASSIFIES"
+		}
+	]
+}
