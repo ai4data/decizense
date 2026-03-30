@@ -7,11 +7,15 @@
 <h1 align="center">dazense</h1>
 
 <h3 align="center">
-  The #1 Open-Source Analytics Agent
+  Trusted Analytics Agents
 </h3>
 
 <p align="center">
-  🌐 <a href="https://dazense.metazense.com">Website</a> · 📚 <a href="https://dadocs.metazense.com">Documentation</a> · 💬 <a href="https://metazense.slack.com">Slack</a>
+  Governance layers between AI agents and your data — so every answer is correct, safe, and auditable.
+</p>
+
+<p align="center">
+  <a href="https://dazense.metazense.com">Website</a> · <a href="https://dadocs.metazense.com">Documentation</a> · <a href="https://metazense.slack.com">Slack</a>
 </p>
 
 <br/>
@@ -24,192 +28,183 @@
 
 <br/>
 
-## What is dazense?
+## The Problem
 
-dazense is a framework to build and deploy analytics agent. <br/>
-Create the context of your analytics agent with dazense-core cli: data, metadata, modeling, rules, etc. <br/>
-Deploy a UI for anyone to chat with your agent and run analytics on your data.
+An LLM-based agent with SQL access to a database has no constraints. It can compute revenue including returned orders (wrong), expose customer names (PII violation), query staging tables (out of scope), and give different answers to the same question. The database executes whatever SQL it receives.
 
-## Key Features
+## The Solution
 
-For **data teams**:
+dazense puts **governance layers** between the agent and the database:
 
-- 🧱 **Open Context Builder** — Create a file-system like context for your agent. Add anything you want in the context: data, metadata, docs, tools, MCPs. No limit.
-- 🏳️ **Data Stack Agnostic** — Works with any data warehouse, stack, type of context, LLM.
-- 🕵🏻‍♀️ **Agent Reliability Visibility** — Unit test your agent performance before deploying it to users. Version the context and track the performance of your agent over time. Get users feedbacks to improve the agent and track their usage.
-- 🔒 **Self-hosted & secure** — Self-host your analytics agent and use your own LLM keys to guarantee maximum security for your data.
-
-For **business users**:
-
-- 🤖 **Natural Language to Insights** — Ask questions in plain English, get analytics straight away
-- 📊 **Native Data Visualization** — Create and customize visualizations directly in the chat interface
-- 🧊 **Transparent Reasoning** — See the agent reasoning and sources clearly
-- 👍 **Easy Feedback** — Send feedback to the data team when a answer is right or wrong
-
-## ⚡️ Quickstart your agent in 1 minute
-
-- **Step 1**: Install dazense-core package
-
-    ```bash
-    pip install dazense-core
-    ```
-
-<br/>
-
-- **Step 2**: Initialize a dazense project
-
-    ```bash
-    dazense init
-    ```
-
-    It will ask you:
-    - To name your project
-    - If you want to connect a database _(optional)_
-    - If you want to add a repo in agent context _(optional)_
-    - To add an LLM key _(optional)_
-    - If you want to setup a Slack connection _(optional)_
-
-    💡 You can skip any optional question and configure them later in your `dazense_config.yaml` file.
-
-    This will create:
-    - A new folder with your project name
-    - An architecture for your context files
-    - A `dazense_config.yaml` configuration file
-    - A `RULES.md` file
-
-<br/>
-
-- **Step 3**: Verify your setup
-
-    cd to the project folder and run:
-
-    ```bash
-    dazense debug
-    ```
-
-<br/>
-
-- **Step 4**: Synchronize your context
-
-    ```bash
-    dazense sync
-    ```
-
-    This will populate your context folder with your context files (data, metadata, repos, etc.)
-
-<br/>
-
-- **Step 5**: Launch the chat and ask questions
-
-    ```bash
-    dazense chat
-    ```
-
-    This will start the dazense chat UI. It will open the chat interface in your browser at `http://localhost:5005`.
-    From there, you can start asking questions to your agent.
-
-## Evaluation framework
-
-Unit test your agent performance before deploying it to users. First, create a folder `tests/` with questions and expected SQL in yaml.
-Then, measure agent's performance on examples with dazense test command:
-
-```bash
-dazense test
+```
+User question (natural language)
+       |
+   LLM Agent
+       |
+  +-------------------------------+
+  |  dazense governance stack     |
+  |                               |
+  |  1. Semantic Layer            |  -> consistent metrics
+  |  2. Business Rules            |  -> domain knowledge
+  |  3. Dataset Bundle            |  -> trust boundary
+  |  4. Policy Engine             |  -> hard enforcement
+  |  5. Governance Graph          |  -> explainability
+  +-------------------------------+
+       |
+   Database
 ```
 
-View results in tests panel:
+Each layer is optional and additive. Start with just a database connection and add governance incrementally.
+
+## Governance Layers
+
+### Semantic Layer
+
+Pre-defined metrics with baked-in filters. `total_revenue` always excludes returned orders — every user, every time, same answer. The agent calls `query_metrics` instead of writing raw SQL.
+
+### Business Rules
+
+Codified domain knowledge: "revenue means net revenue", "first_name is PII", "customers with 1 order are new". The agent looks up rules before answering via the `get_business_context` tool.
+
+### Dataset Bundle
+
+A trust boundary — which tables, joins, and time filters the agent can use. A query referencing a table outside the bundle is rejected. Only declared joins are allowed.
+
+### Policy Engine
+
+Hard enforcement at query time. PII columns are blocked. Row limits enforced. SQL is parsed to prevent multi-statement injection. No bypass.
+
+### Governance Graph
+
+All four layers compile into a typed directed graph (nodes: tables, columns, measures, rules, classifications, policies; edges: aggregates, blocks, classifies, applies_to). Enables lineage, impact analysis, gap detection, and explainability.
+
+The graph is exposed to the agent as callable tools — so it can answer "Why is first_name blocked?" and "What breaks if the amount column changes?" in real time.
+
+## Quickstart
+
+**Step 1**: Install dazense-core
 
 ```bash
-dazense test server
+pip install dazense-core
 ```
+
+**Step 2**: Initialize a project
+
+```bash
+dazense init
+```
+
+This creates a project folder with a `dazense_config.yaml` configuration file. The wizard prompts for database connections and LLM provider.
+
+**Step 3**: Sync database metadata
+
+```bash
+dazense sync
+```
+
+Generates markdown documentation (columns, sample data, descriptions) for every table — so the agent understands your database without querying it directly.
+
+**Step 4**: Launch the chat
+
+```bash
+dazense chat
+```
+
+Opens the chat UI at `http://localhost:5005`. Ask questions in natural language.
+
+**Step 5**: Add governance (optional, incremental)
+
+| File                           | Layer          | What it does                                              |
+| ------------------------------ | -------------- | --------------------------------------------------------- |
+| `semantics/semantic_model.yml` | Semantic Layer | Define measures, dimensions, joins with baked-in filters  |
+| `semantics/business_rules.yml` | Business Rules | Domain constraints, classifications (PII, Financial)      |
+| `datasets/*/dataset.yaml`      | Dataset Bundle | Table allowlist, join allowlist, time filter requirements |
+| `policies/policy.yml`          | Policy         | PII blocking, SQL validation, row limits                  |
+
+See the full [Tutorial](docs/TUTORIAL.md) for a step-by-step guide.
 
 ## Commands
 
-```bash
-dazense --help
-Usage: dazense COMMAND
-
-╭─ Commands ────────────────────────────────────────────────────────────────╮
-│ chat         Start the dazense chat UI.                                   │
-│ init         Initialize a new dazense project.                            │
-│ sync         Sync context from your context sources (databases, repos)    │
-│ test         Measure agent's performance on test examples.                │
-│ debug        Debug and troubleshoot your dazense setup.                   │
-│ --help (-h)  Display this message and exit.                               │
-│ --version    Display application version.                                 │
-╰───────────────────────────────────────────────────────────────────────────╯
+```
+dazense init          Create a new project
+dazense sync          Sync database metadata to local files
+dazense debug         Test database and LLM connectivity
+dazense validate      Check configuration consistency
+dazense chat          Open the chat UI
+dazense graph show    Governance graph node/edge counts
+dazense graph lineage Trace upstream dependencies
+dazense graph impact  Measure downstream blast radius
+dazense graph gaps    Find governance coverage gaps
+dazense eval          Run automated governance tests
 ```
 
-## 🐳 Docker
+## Supported Databases
 
-Pull the image from DockerHub:
+DuckDB, PostgreSQL, BigQuery, Snowflake, Databricks, SQL Server, Redshift
+
+## Architecture
+
+```
+dazense/
+  cli/              Python CLI (dazense-core on PyPI)
+  apps/backend/     TypeScript backend (Fastify + tRPC)
+  apps/frontend/    React chat UI
+  apps/shared/      Shared Zod schemas
+```
+
+The CLI handles project initialization, sync, validation, and graph commands. The backend serves the chat UI, runs the agent, and enforces governance at query time. The semantic layer execution engine uses Ibis for cross-database compatibility.
+
+### Stack
+
+**Backend**: Fastify, Drizzle, tRPC, Bun
+
+**Frontend**: React, TanStack Query, Shadcn
+
+**CLI**: Python, Cyclopts, Rich, Ibis
+
+**Semantic Engine**: Ibis (compiles to DuckDB, PostgreSQL, BigQuery, Snowflake, Databricks)
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run in dev mode (backend + frontend + FastAPI)
+npm run dev
+
+# Lint
+npm run lint
+
+# Run Python tests
+cd cli && uv run pytest tests/ -v
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Docker
 
 ```bash
 docker pull metazense/dazense:latest
-```
 
-Run dazense chat with Docker using the example project bundled in the image:
-
-```bash
 docker run -d \
   --name dazense \
   -p 5005:5005 \
   -e BETTER_AUTH_URL=http://localhost:5005 \
-  metazense/dazense:latest
-```
-
-Run dazense chat with Docker using your local dazense project:
-
-```bash
-docker run -d \
-  --name dazense \
-  -p 5005:5005 \
-  -e BETTER_AUTH_URL=http://localhost:5005 \
-  -v /path/to/your/dazense-project:/app/project \
+  -v /path/to/your/project:/app/project \
   -e DAZENSE_DEFAULT_PROJECT_PATH=/app/project \
   metazense/dazense:latest
 ```
 
-Access the UI at http://localhost:5005
+See [DockerHub](https://hub.docker.com/r/metazense/dazense) and the [Deployment Guide](https://dadocs.metazense.com/dazense-agent/self-hosting/deployment-guide) for details.
 
-See the [DockerHub page](https://hub.docker.com/r/metazense/dazense) for more details.
-
-For end-to-end self-hosted deployment (for example on Cloud Run with PostgreSQL), see the [Deployment Guide](https://dadocs.metazense.com/dazense-agent/self-hosting/deployment-guide).
-
-## 👩🏻‍💻 Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, commands, and guidelines.
-
-## 📒 Stack
-
-### Backend
-
-- Fastify: https://fastify.dev/docs/latest/
-- Drizzle: https://orm.drizzle.team/docs/get-started
-- tRPC router: https://trpc.io/docs/server/routers
-
-### Frontend
-
-- tRPC client: https://trpc.io/docs/client/tanstack-react-query/usage
-- Tanstack Query: https://tanstack.com/query/latest/docs/framework/react/overview
-- Shadcn: https://ui.shadcn.com/docs/components
-
-## ⛹️‍♀️ Join the Community
+## Community
 
 - Star the repo
-- Subscribe to releases (Watch → Custom → Releases)
 - Follow us on [LinkedIn](https://www.linkedin.com/company/metazense)
 - Join our [Slack](https://metazense.slack.com)
-- Contribute to the repo!
+- Contribute!
 
-## 🫰🏻 Partners
+## License
 
-metazense is a proud Y Combinator company!
-
-<a href="https://ycombinator.com/">
-    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Y_Combinator_logo.svg/1200px-Y_Combinator_logo.svg.png" alt="YCombinator" style="padding: 10px" width="70px">
-</a>
-
-## 📄 License
-
-This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
+Apache 2.0 — see [LICENSE](LICENSE).
