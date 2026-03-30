@@ -10,6 +10,7 @@ from .databases import (
 )
 from .exceptions import InitError
 from .llm import LLMConfig, LLMProvider
+from .openmetadata import OpenMetadataConfig
 from .slack import SlackConfig
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "LLMConfig",
     "LLMProvider",
     "SlackConfig",
+    "OpenMetadataConfig",
     "InitError",
 ]

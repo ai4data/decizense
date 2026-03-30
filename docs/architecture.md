@@ -433,7 +433,7 @@ In `cli/dazense_core/commands/init/`:
 - Existing tools (execute_sql, read, grep, list, search, display_chart) — untouched.
 - RULES.md — still works as before, complemented by structured business_rules.yml.
 
-### Agent decision flow (new)
+### Agent decision flow (semantic layer)
 
 ```
 User question arrives
@@ -470,7 +470,7 @@ User question arrives
   - Charts if applicable
 ```
 
-### File inventory (new files only)
+### File inventory (semantic layer files only)
 
 ```
 cli/dazense_core/semantic/__init__.py        # Module init
@@ -486,7 +486,7 @@ apps/backend/src/agents/tools/get-business-context.ts  # Agent tool (~40 lines)
 Total: ~650 lines of new code
 ```
 
-### Dependencies (new)
+### Dependencies (semantic layer)
 
 **None.** Everything uses existing dependencies:
 
@@ -494,3 +494,218 @@ Total: ~650 lines of new code
 - PyYAML (already in cli/pyproject.toml)
 - FastAPI/uvicorn (already running)
 - Vercel AI SDK (already in backend)
+
+---
+
+## V1 Architecture: Trusted Analytics Copilot (Enforcement Layer)
+
+> **Status:** Implemented. All V1 components are live.
+
+The enforcement layer adds **contract-first execution** on top of the semantic layer and business rules. Every query must pass through a policy engine before data is accessed.
+
+### Overview
+
+```
+                    Browser
+                      |
+                      v
+              +---------------+
+              |   Frontend    |
+              |  :3000 (dev)  |
+              +-------+-------+
+                      |
+                      v
+              +---------------+
+              |   Backend     |
+              |    :5005      |
+              +-------+-------+
+                      |
+          +-----------+-----------+------------------+
+          |           |           |                  |
+          v           v           v                  v
+  +---------------+  +---------+  +---------------+  +---------------+
+  |   FastAPI     |  | Policy  |  |   LLM API     |  |   App DB      |
+  |    :8005      |  | Engine  |  |  (external)   |  | SQLite / PG   |
+  |               |  +---------+  +---------------+  +---------------+
+  | /execute_sql  |  | SQL     |
+  | /execute_py   |  | Valid.  |
+  | /query_metrics|  +---------+
+  | /business_ctx |  | Contract|
+  +-------+-------+  | Writer  |
+          |           +---------+
+    +-----+-----+
+    |     |     |
+    v     v     v
+  +---+ +---+ +---+
+  |Ibis| |Sem| |Biz|
+  |    | |Lyr| |Rul|
+  +---+ +---+ +---+
+    |     |
+    v     v
+  +---------------+
+  |   Database    |
+  |  (user data)  |
+  +---------------+
+```
+
+### What V1 adds
+
+#### 1. Policy Engine (`apps/backend/src/policy/policy-engine.ts`)
+
+Pure function: `evaluatePolicy(contractDraft, policy, bundles) → PolicyDecision`
+
+Checks (in order):
+
+1. **Bundle tables check** — all tables must be in the selected bundle's `tables` list
+2. **Join allowlist check** — all joins must match the bundle's approved join edges
+3. **PII block check** — no selected columns in `policy.pii.columns[table]`
+4. **Time filter check** — fact tables require a time window (configured per-table)
+5. **Limit check** — row limit must be ≤ `policy.defaults.max_rows`
+6. **Bundle requirement check** — if `execution.require_bundle=true` and no bundle → `needs_clarification`
+
+Returns one of three states:
+
+- `{ status: 'allow', checks }` — proceed with execution
+- `{ status: 'block', reason, fixes, checks }` — reject with actionable feedback
+- `{ status: 'needs_clarification', questions, checks }` — ask user for more info
+
+No file I/O — pure logic, easy to unit test.
+
+#### 2. SQL Validator (`apps/backend/src/policy/sql-validator.ts`)
+
+Validates the actual SQL against the contract and policy at execution time. Uses regex-based parsing (fail-closed: parse failure = block).
+
+Extracts from SQL:
+
+- Referenced tables (with alias resolution)
+- Multi-statement detection
+- LIMIT presence and value
+- JOIN edges (ON conditions with alias resolution)
+- WHERE clause time column references
+
+Validates:
+
+- All tables in contract scope
+- No PII columns referenced
+- LIMIT present and ≤ policy maximum
+- No multi-statement SQL
+- JOIN edges match approved join allowlist (bidirectional matching)
+- Time column referenced in WHERE clause for tables that require it
+
+#### 3. Contract Writer (`apps/backend/src/contracts/contract-writer.ts`)
+
+- `persistContract(contract, projectFolder)` — writes JSON to `{projectFolder}/contracts/runs/{timestamp}_{id}.json`
+- `loadContract(contractId, projectFolder)` — reads back by glob `contracts/runs/*_{id}.json`
+- Creates `contracts/runs/` directory if missing
+
+Each contract records: actor, request, scope (tables, approved joins, time columns), meaning (metric refs, guidance rules), execution (tool + params), and policy checks.
+
+#### 4. `build_contract` Agent Tool (`apps/backend/src/agents/tools/build-contract.ts`)
+
+First-class agent tool the LLM calls explicitly before any data access:
+
+```
+build_contract({
+  user_prompt: string,
+  bundle_id?: string,
+  tables: string[],
+  joins?: JoinSpec[],
+  metric_refs?: string[],
+  time_window?: TimeWindow,
+  tool: "execute_sql" | "query_metrics",
+  params: object
+}) → { status: 'allow', contract_id, contract }
+   | { status: 'block', reason, fixes }
+   | { status: 'needs_clarification', questions }
+```
+
+Tool output component (`build-contract.tsx`) shows status, contract_id, checks, and feedback.
+
+#### 5. Gated Execution (`execute-sql.ts`, `query-metrics.ts`)
+
+Both tools are modified to support two modes:
+
+- **Legacy mode** (`require_contract: false`): tools work as before, no contract needed
+- **Strict mode** (`require_contract: true`): tools require a valid `contract_id`
+
+In strict mode:
+
+- Missing `contract_id` → hard block: "Contract required. Call build_contract first."
+- Invalid `contract_id` → hard block
+- SQL parsed and validated against contract + policy before execution
+- `query_metrics` validates all parameters (model, measures, dimensions, filters with column+operator+value, order_by with column+direction, limit) match the contract
+
+#### 6. Loaders (`apps/backend/src/agents/user-rules.ts`)
+
+Two new functions following the existing pattern:
+
+- `getPolicies()` — reads `{projectFolder}/policies/policy.yml` → typed `PolicyConfig | null`
+- `getDatasetBundles()` — reads all `{projectFolder}/datasets/*/dataset.yaml` → `DatasetBundle[]`
+
+#### 7. Zod Schemas (`apps/shared/src/tools/build-contract.ts`)
+
+Contract schemas (input, output, internal contract structure) defined with Zod. `execute-sql.ts` and `query-metrics.ts` schemas extended with optional `contract_id` field.
+
+#### 8. System Prompt Updates (`system-prompt.tsx`)
+
+New conditional section injected when policies and bundles exist:
+
+- Trusted Execution Rules (always call `build_contract` first, work within bundles, PII blocked)
+- Bundle summaries (available data products, tables, approved joins)
+- Policy summary (enforcement mode, limits, PII rules)
+
+#### 9. `dazense validate` CLI Command (`cli/dazense_core/commands/validate.py`)
+
+Checks consistency across all governance files:
+
+- Config loads correctly
+- Bundle tables exist in configured databases
+- PII columns in policy exist in bundle tables
+- Join allowlist columns exist in referenced tables
+- Semantic model references align with bundle tables
+
+### V1 Runtime Flow
+
+```
+Current (legacy mode, require_contract: false):
+  Agent → execute_sql / query_metrics → FastAPI → DB → results
+
+New (strict mode, require_contract: true):
+  User question
+    → Agent reasons about the question
+    → Agent calls build_contract(bundle, tables, joins, metrics, params)
+    → Policy engine evaluates → allow / block / needs_clarification
+      → if allow:  contract persisted, agent calls execute_sql/query_metrics with contract_id
+                   → SQL validator checks SQL against contract + policy
+                   → results returned with provenance (contract_id, sources, checks)
+      → if block:  agent receives reason + suggested fixes, explains to user
+      → if clarify: agent receives questions, asks user, then retries build_contract
+```
+
+### V1 File Inventory (new files)
+
+```
+apps/shared/src/tools/build-contract.ts              # Zod schemas for build_contract
+apps/backend/src/policy/policy-engine.ts              # Policy evaluation (pure function)
+apps/backend/src/policy/sql-validator.ts              # SQL parsing + contract validation
+apps/backend/src/contracts/contract-writer.ts         # Persist/load contracts
+apps/backend/src/agents/tools/build-contract.ts       # build_contract tool implementation
+apps/backend/src/components/tool-outputs/build-contract.tsx  # Tool output component
+apps/backend/tests/sql-validator.test.ts              # Unit tests (31 tests)
+cli/dazense_core/commands/validate.py                 # dazense validate CLI command
+
+Modified:
+apps/backend/src/agents/user-rules.ts                 # getPolicies() + getDatasetBundles()
+apps/shared/src/tools/execute-sql.ts                   # contract_id field
+apps/shared/src/tools/query-metrics.ts                 # contract_id field
+apps/backend/src/agents/tools/execute-sql.ts           # Contract gate + SQL validation
+apps/backend/src/agents/tools/query-metrics.ts         # Contract gate + param validation
+apps/backend/src/agents/tools/index.ts                 # Register build_contract
+apps/backend/src/components/system-prompt.tsx           # Trusted Execution Rules section
+apps/backend/src/components/tool-outputs/index.ts      # Export BuildContractOutput
+```
+
+### V1 Dependencies
+
+- `node-sql-parser` (npm) — SQL parsing in the validator (new)
+- All other dependencies already existed

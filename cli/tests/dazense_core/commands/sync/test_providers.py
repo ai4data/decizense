@@ -47,7 +47,7 @@ class TestGetAllProviders:
     def test_returns_list_of_providers(self):
         providers = get_all_providers()
 
-        assert len(providers) == 3
+        assert len(providers) == 4
         assert any(isinstance(p.provider, RepositorySyncProvider) for p in providers)
         assert any(isinstance(p.provider, DatabaseSyncProvider) for p in providers)
         assert any(isinstance(p.provider, NotionSyncProvider) for p in providers)

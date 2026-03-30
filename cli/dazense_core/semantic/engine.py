@@ -168,8 +168,43 @@ class SemanticEngine:
             measure_def = model_def.measures.get(measure_name)
             if measure_def is None:
                 raise ValueError(f"Measure '{measure_name}' not found on model '{model_def.table}'")
-            exprs.append(self._aggregate(table, measure_def.type, measure_def.column, measure_name))
+            # Build a WHERE condition from measure-level filters (e.g., exclude returned orders)
+            where_cond = None
+            if measure_def.filters:
+                where_cond = self._build_filter_condition(table, measure_def.filters)
+            exprs.append(self._aggregate(table, measure_def.type, measure_def.column, measure_name, where_cond))
         return exprs
+
+    @staticmethod
+    def _build_filter_condition(table: ir.Table, filters: list) -> ir.BooleanValue | None:
+        """Build a combined boolean condition from measure-level filters."""
+        condition = None
+        for f in filters:
+            col = f.column if hasattr(f, "column") else f["column"]
+            op = f.operator if hasattr(f, "operator") else f.get("operator", "eq")
+            val = f.value if hasattr(f, "value") else f["value"]
+            col_ref = table[col]
+            match op:
+                case "eq":
+                    cond = col_ref == val
+                case "ne":
+                    cond = col_ref != val
+                case "gt":
+                    cond = col_ref > val
+                case "gte":
+                    cond = col_ref >= val
+                case "lt":
+                    cond = col_ref < val
+                case "lte":
+                    cond = col_ref <= val
+                case "in":
+                    cond = col_ref.isin(val)
+                case "not_in":
+                    cond = ~col_ref.isin(val)
+                case _:
+                    raise ValueError(f"Unsupported filter operator: {op}")
+            condition = cond if condition is None else (condition & cond)
+        return condition
 
     @staticmethod
     def _aggregate(
@@ -177,25 +212,26 @@ class SemanticEngine:
         agg_type: AggregationType,
         column: str | None,
         alias: str,
+        where: ir.BooleanValue | None = None,
     ) -> ir.Scalar:
         match agg_type:
             case AggregationType.COUNT:
-                return table.count().name(alias)
+                return table.count(where=where).name(alias)
             case AggregationType.COUNT_DISTINCT:
                 assert column is not None
-                return table[column].nunique().name(alias)
+                return table[column].nunique(where=where).name(alias)
             case AggregationType.SUM:
                 assert column is not None
-                return table[column].sum().name(alias)
+                return table[column].sum(where=where).name(alias)
             case AggregationType.AVG:
                 assert column is not None
-                return table[column].mean().name(alias)
+                return table[column].mean(where=where).name(alias)
             case AggregationType.MIN:
                 assert column is not None
-                return table[column].min().name(alias)
+                return table[column].min(where=where).name(alias)
             case AggregationType.MAX:
                 assert column is not None
-                return table[column].max().name(alias)
+                return table[column].max(where=where).name(alias)
 
     @staticmethod
     def _apply_filters(expr: ir.Table, filters: list[dict]) -> ir.Table:

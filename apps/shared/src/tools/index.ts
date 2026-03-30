@@ -1,8 +1,13 @@
+export * as buildContract from './build-contract';
 export * as classify from './classify';
 export * as displayChart from './display-chart';
 export * as executePython from './execute-python';
 export * as executeSql from './execute-sql';
 export * as getBusinessContext from './get-business-context';
+export * as graphExplain from './graph-explain';
+export * as graphGaps from './graph-gaps';
+export * as graphImpact from './graph-impact';
+export * as graphLineage from './graph-lineage';
 export * as grep from './grep';
 export * as list from './list';
 export * as queryMetrics from './query-metrics';

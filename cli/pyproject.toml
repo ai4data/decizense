@@ -88,4 +88,5 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = ["parity: cross-language parity tests requiring both Python and Bun/TS"]
 

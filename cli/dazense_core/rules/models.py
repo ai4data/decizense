@@ -16,7 +16,8 @@ class BusinessRule(BaseModel):
 class Classification(BaseModel):
     name: str
     description: str
-    condition: str
+    condition: str | None = None
+    columns: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     characteristics: dict[str, str] = Field(default_factory=dict)
 

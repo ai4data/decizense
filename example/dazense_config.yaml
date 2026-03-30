@@ -19,3 +19,6 @@ llm:
 slack: null
 mcp:
   json_file_path: ./agent/mcps/mcp.json
+openmetadata:
+  url: http://localhost:8585
+  services: [jaffle_shop_postgres]

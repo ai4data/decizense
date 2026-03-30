@@ -1,5 +1,7 @@
 import z from 'zod/v3';
 
+import { ProvenanceSchema } from './build-contract';
+
 export const FilterSchema = z.object({
 	column: z.string().describe('Column name to filter on'),
 	operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in']).default('eq').describe('Filter operator'),
@@ -22,6 +24,10 @@ export const InputSchema = z.object({
 		.string()
 		.optional()
 		.describe('The database name/id to use. Required if multiple databases are configured.'),
+	contract_id: z
+		.string()
+		.optional()
+		.describe('Contract ID from build_contract. Required when execution.require_contract is true in policy.'),
 });
 
 export const OutputSchema = z.object({
@@ -34,6 +40,8 @@ export const OutputSchema = z.object({
 	dimensions: z.array(z.string()),
 	/** The id of the query result. May be referenced by the `display_chart` tool call. */
 	id: z.custom<`query_${string}`>(),
+	/** Provenance from the execution contract, when available. */
+	provenance: ProvenanceSchema.optional(),
 });
 
 export type Input = z.infer<typeof InputSchema>;

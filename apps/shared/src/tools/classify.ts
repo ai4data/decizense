@@ -8,9 +8,10 @@ export const InputSchema = z.object({
 export const ClassificationSchema = z.object({
 	name: z.string(),
 	description: z.string(),
-	condition: z.string(),
+	condition: z.string().optional(),
+	columns: z.array(z.string()).default([]),
 	tags: z.array(z.string()),
-	characteristics: z.record(z.string()),
+	characteristics: z.record(z.string()).default({}),
 });
 
 export const OutputSchema = z.object({

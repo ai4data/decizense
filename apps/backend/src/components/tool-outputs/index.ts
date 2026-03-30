@@ -3,10 +3,15 @@ import type { ReactNode } from 'react';
 
 import { renderToMarkdown } from '../../lib/markdown/render-to-markdown';
 
+export { BuildContractOutput } from './build-contract';
 export { ClassifyOutput } from './classify';
 export { DisplayChartOutput } from './display-chart';
 export { ExecuteSqlOutput } from './execute-sql';
 export { GetBusinessContextOutput } from './get-business-context';
+export { GraphExplainOutput } from './graph-explain';
+export { GraphGapsOutput } from './graph-gaps';
+export { GraphImpactOutput } from './graph-impact';
+export { GraphLineageOutput } from './graph-lineage';
 export { GrepOutput } from './grep';
 export { ListOutput } from './list';
 export { QueryMetricsOutput } from './query-metrics';

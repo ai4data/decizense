@@ -14,6 +14,7 @@ from .databases import DATABASE_CONFIG_CLASSES, AnyDatabaseConfig, DatabaseType,
 from .llm import LLMConfig
 from .mcp import McpConfig
 from .notion import NotionConfig
+from .openmetadata import OpenMetadataConfig
 from .repos import RepoConfig
 from .slack import SlackConfig
 
@@ -34,6 +35,7 @@ class DazenseConfig(BaseModel):
     llm: LLMConfig | None = Field(default=None, description="The LLM configuration")
     slack: SlackConfig | None = Field(default=None, description="The Slack configuration")
     mcp: McpConfig | None = Field(default=None, description="The MCP configuration")
+    openmetadata: OpenMetadataConfig | None = Field(default=None, description="The OpenMetadata configuration")
 
     @model_validator(mode="before")
     @classmethod
