@@ -1,6 +1,6 @@
 # Trusted Analytics Copilot — Implementation Plan (Dazense)
 
-> **Status:** V1 is fully implemented. V1.5 (Governance Knowledge Graph) is complete with 84 passing tests (53 Python, 24 TypeScript, 7 cross-language parity). Next: V1.6 (Graph-as-Tools) → V2 (OpenMetadata Integration). See `docs/TESTING_V1.md` for a hands-on tutorial and `docs/architecture.md` for the updated architecture diagram.
+> **Status:** V1 is fully implemented. V1.5 (Governance Knowledge Graph) is complete with 84 passing tests (53 Python, 24 TypeScript, 7 cross-language parity). Next: V1.6 (Graph-as-Tools) → V2 (OpenMetadata Integration). A dedicated synthetic-operations experiment (events + PM4PY + simulated employee agents) is planned in `docs/digital-twin-mvp-plan.md`. Program-level success criteria are tracked in `docs/north-star-context-infrastructure.md`. See `docs/TESTING_V1.md` for a hands-on tutorial and `docs/architecture.md` for the updated architecture diagram.
 
 ## 1. Why We're Doing This
 
