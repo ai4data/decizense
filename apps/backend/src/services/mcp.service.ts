@@ -135,6 +135,7 @@ export class McpService {
 				command: {
 					kind: 'http',
 					url: config.url!,
+					...(config.headers && { headers: config.headers }),
 				},
 			};
 		}

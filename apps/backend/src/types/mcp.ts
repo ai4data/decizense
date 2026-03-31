@@ -3,6 +3,7 @@ import { z } from 'zod';
 export interface McpServerConfig {
 	type?: 'http';
 	url?: URL;
+	headers?: Record<string, string>;
 
 	// For stdio transport
 	command?: string;
@@ -29,6 +30,7 @@ export const mcpJsonSchema = z.object({
 				.url()
 				.optional()
 				.transform((val) => (val ? new URL(val) : undefined)),
+			headers: z.record(z.string(), z.string()).optional(),
 			command: z.string().optional(),
 			args: z.array(z.string()).optional(),
 			env: z.record(z.string(), z.string()).optional(),

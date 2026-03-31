@@ -223,27 +223,46 @@ An AI agent helps users discover relevant data by querying the OMD catalog. The 
 6. User reviews, edits if needed, approves
 ```
 
-### Implementation Approaches
+### Implementation: OMD's Built-in MCP Server (Recommended)
 
-**Option A: dazense agent with OMD search tool**
+OMD 1.12 ships with a built-in MCP server at `http://<omd-host>/mcp` — already running on our instance. No custom code needed for discovery.
 
-- Add a `discover_data` agent tool that calls OMD's search/glossary APIs
-- Agent uses existing dazense chat UI
-- Works within the current architecture
-- OMD endpoints: `/api/v1/search/query`, `/api/v1/glossaryTerms`, `/api/v1/lineage`
+**OMD MCP tools available to the dazense agent:**
 
-**Option B: OMD AI SDK integration**
+| Tool                  | Discovery role                                                |
+| --------------------- | ------------------------------------------------------------- |
+| `search_metadata`     | Keyword search with filters (entity type, tags, owners, tier) |
+| `semantic_search`     | Vector/embedding search for conceptual queries                |
+| `get_entity_details`  | Full table/column metadata by FQN                             |
+| `get_entity_lineage`  | Pipeline lineage (up to 10 hops upstream/downstream)          |
+| `root_cause_analysis` | Find upstream DQ failures affecting a table                   |
+| `patch_entity`        | Update descriptions, tags, owners (if bot role allows)        |
 
-- OMD 1.12 has AI capabilities (NLQ search, semantic search, vector search)
-- `/api/v1/search/nlq/query` — natural language search over the catalog
-- `/api/v1/search/vector/query` — semantic similarity search
-- dazense delegates discovery to OMD's AI layer, focuses on bundle generation
+**Configuration** — add OMD as an MCP server in `agent/mcps/mcp.json`:
 
-**Option C: MCP server for OMD catalog**
+```json
+{
+	"mcpServers": {
+		"openmetadata": {
+			"url": "http://localhost:8585/mcp",
+			"headers": {
+				"Authorization": "Bearer <bot-jwt-token>"
+			}
+		}
+	}
+}
+```
 
-- Build an MCP server that exposes OMD catalog as tools
-- Any AI agent (dazense, Claude, ChatGPT) can discover data via MCP
-- Most flexible — decouples discovery from dazense's agent
+**Discovery workflow:**
+
+1. Agent calls `search_metadata` or `semantic_search` → finds relevant tables
+2. Agent calls `get_entity_details` → inspects columns, tags, PII, owners
+3. Agent calls `get_entity_lineage` → traces pipeline dependencies
+4. User selects tables → dazense generates `dataset.yaml` (bundle generation is dazense's responsibility)
+
+**Key advantage:** OMD MCP uses the bot's JWT token → inherits RBAC. The agent can only discover data that `dazense-jaffle-agent` is authorized to see. Governance is enforced at the discovery layer too.
+
+**Authentication:** The MCP server uses the same bot JWT token configured in `dazense_config.yaml`. The bot's `DazenseAgentRole` (ViewAll, deny edits) ensures the agent can search and read but cannot modify metadata through MCP.
 
 ### Bundle Generation Logic
 
