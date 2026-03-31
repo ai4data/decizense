@@ -56,6 +56,35 @@ User question (natural language)
 
 Each layer is optional and additive. Start with just a database connection and add governance incrementally.
 
+## Catalog Integration
+
+dazense integrates with enterprise data catalog platforms to pull governance metadata — PII tags, glossary terms, lineage, ownership, and data quality. The catalog is the **source of truth** for governance; dazense is the **enforcement layer** that makes it actionable at query time.
+
+```yaml
+# dazense_config.yaml
+catalog:
+    provider: openmetadata # or atlan, collibra, purview
+    url: http://localhost:8585
+    token: "{{ env('CATALOG_TOKEN') }}"
+    services: [my_database]
+```
+
+```bash
+dazense sync -p catalog
+```
+
+This single command:
+
+- Pulls PII tags, glossary terms, lineage, ownership, and descriptions from the catalog
+- Auto-generates `policy.yml` (PII columns derived from catalog tags — no manual YAML editing)
+- Creates a governance snapshot that enriches the graph with glossary terms and pipeline lineage
+
+**Supported catalogs**: OpenMetadata (implemented), Atlan, Collibra, Purview (pluggable — same snapshot format)
+
+**Adding a new catalog**: Implement a client that produces the same snapshot JSON. The graph, policy engine, and agent tools work unchanged.
+
+The governance team manages tags, glossary, and ownership in the catalog platform. Business users ask questions in dazense. Nobody hand-edits YAML.
+
 ## Governance Layers
 
 ### Semantic Layer
@@ -112,35 +141,48 @@ dazense chat
 
 Opens the chat UI at `http://localhost:5005`. Ask questions in natural language.
 
-**Step 5**: Add governance (optional, incremental)
+**Step 5**: Connect a catalog (optional — for enterprise governance)
 
-| File                           | Layer          | What it does                                              |
-| ------------------------------ | -------------- | --------------------------------------------------------- |
-| `semantics/semantic_model.yml` | Semantic Layer | Define measures, dimensions, joins with baked-in filters  |
-| `semantics/business_rules.yml` | Business Rules | Domain constraints, classifications (PII, Financial)      |
-| `datasets/*/dataset.yaml`      | Dataset Bundle | Table allowlist, join allowlist, time filter requirements |
-| `policies/policy.yml`          | Policy         | PII blocking, SQL validation, row limits                  |
+```bash
+dazense sync -p catalog
+```
+
+Pulls tags, glossary, lineage, and ownership from your data catalog (OpenMetadata, Atlan, Collibra, or Purview). Auto-generates `policy.yml` from catalog PII tags.
+
+**Step 6**: Add governance (optional, incremental)
+
+| File                           | Layer          | What it does                                              | Source            |
+| ------------------------------ | -------------- | --------------------------------------------------------- | ----------------- |
+| `semantics/semantic_model.yml` | Semantic Layer | Measures, dimensions, joins with baked-in filters         | Manual            |
+| `semantics/business_rules.yml` | Business Rules | Domain constraints, classifications (PII, Financial)      | Manual            |
+| `datasets/*/dataset.yaml`      | Dataset Bundle | Table allowlist, join allowlist, time filter requirements | Manual/Catalog    |
+| `policies/policy.yml`          | Policy         | PII blocking, SQL validation, row limits                  | Auto from catalog |
 
 See the full [Tutorial](docs/TUTORIAL.md) for a step-by-step guide.
 
 ## Commands
 
 ```
-dazense init          Create a new project
-dazense sync          Sync database metadata to local files
-dazense debug         Test database and LLM connectivity
-dazense validate      Check configuration consistency
-dazense chat          Open the chat UI
-dazense graph show    Governance graph node/edge counts
-dazense graph lineage Trace upstream dependencies
-dazense graph impact  Measure downstream blast radius
-dazense graph gaps    Find governance coverage gaps
-dazense eval          Run automated governance tests
+dazense init              Create a new project
+dazense sync              Sync all metadata (databases + catalog)
+dazense sync -p catalog   Sync from data catalog (OpenMetadata, Atlan, etc.)
+dazense sync -p databases Sync database schemas only
+dazense debug             Test database and LLM connectivity
+dazense validate          Check configuration consistency
+dazense chat              Open the chat UI
+dazense graph show        Governance graph node/edge counts
+dazense graph lineage     Trace upstream dependencies
+dazense graph impact      Measure downstream blast radius
+dazense graph gaps        Find governance coverage gaps
+dazense graph enrich      Enrich graph from catalog snapshot
+dazense eval              Run automated governance tests
 ```
 
-## Supported Databases
+## Supported Platforms
 
-DuckDB, PostgreSQL, BigQuery, Snowflake, Databricks, SQL Server, Redshift
+**Databases**: DuckDB, PostgreSQL, BigQuery, Snowflake, Databricks, SQL Server, Redshift
+
+**Catalogs**: OpenMetadata (implemented), Atlan, Collibra, Purview (pluggable)
 
 ## Architecture
 
