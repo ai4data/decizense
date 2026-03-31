@@ -18,6 +18,7 @@ class NodeType(str, Enum):
     JoinEdge = "JoinEdge"
     Contract = "Contract"
     PolicyCheck = "PolicyCheck"
+    GlossaryTerm = "GlossaryTerm"
 
 
 # ── Edge types ──
@@ -49,6 +50,9 @@ class EdgeType(str, Enum):
 
     # V2: OpenMetadata discovery edges
     DISCOVERED_BY = "DISCOVERED_BY"
+    RELATED_TO = "RELATED_TO"
+    DESCRIBES = "DESCRIBES"
+    PIPELINE_FEEDS = "PIPELINE_FEEDS"
 
 
 # ── Graph primitives ──

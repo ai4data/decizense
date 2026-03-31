@@ -7,8 +7,9 @@ class OpenMetadataConfig(BaseModel):
     """OpenMetadata integration configuration."""
 
     url: str = Field(default="http://localhost:8585", description="OpenMetadata server URL")
-    email: str = Field(default="admin@open-metadata.org", description="Login email")
-    password: str = Field(default="admin", description="Login password")
+    token: str | None = Field(default=None, description="Bot JWT token (preferred auth method)")
+    email: str = Field(default="admin@open-metadata.org", description="Login email (fallback auth)")
+    password: str = Field(default="admin", description="Login password (fallback auth)")
     services: list[str] = Field(default_factory=list, description="Service names to sync (empty = all)")
     tag_mappings: dict[str, str] = Field(
         default_factory=lambda: {"PII": "PII", "Sensitive": "PII", "PersonalData": "PII"},

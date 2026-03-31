@@ -21,4 +21,8 @@ mcp:
   json_file_path: ./agent/mcps/mcp.json
 openmetadata:
   url: http://localhost:8585
+  token: "{{ env('OMD_BOT_TOKEN') }}"
   services: [jaffle_shop_postgres]
+agent:
+  id: "dazense://metazense.com/jaffle-shop-agent"
+  omd_bot: "dazense-jaffle-agent"

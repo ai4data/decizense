@@ -10,6 +10,35 @@ import httpx
 
 
 @dataclass
+class OMOwner:
+    """An owner from OpenMetadata."""
+
+    name: str
+    type: str  # "user" or "team"
+
+
+@dataclass
+class OMGlossaryTerm:
+    """A glossary term from OpenMetadata."""
+
+    name: str
+    fqn: str
+    glossary: str
+    description: str
+    synonyms: list[str] = field(default_factory=list)
+    related_terms: list[str] = field(default_factory=list)
+
+
+@dataclass
+class OMLineageEdge:
+    """A lineage edge from OpenMetadata."""
+
+    from_fqn: str
+    to_fqn: str
+    type: str  # "upstream" or "downstream"
+
+
+@dataclass
 class OMTable:
     """A table from OpenMetadata with its columns."""
 
@@ -22,6 +51,7 @@ class OMTable:
     description: str
     columns: list[OMColumn] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    owners: list[OMOwner] = field(default_factory=list)
 
 
 @dataclass
@@ -37,16 +67,24 @@ class OMColumn:
 class OpenMetadataClient:
     """Client for OpenMetadata REST API v1."""
 
-    def __init__(self, base_url: str, email: str = "admin@open-metadata.org", password: str = "admin"):
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        email: str = "admin@open-metadata.org",
+        password: str = "admin",
+    ):
         self.base_url = base_url.rstrip("/")
+        self._jwt_token = token
         self._email = email
         self._password = password
-        self._token: str | None = None
+        self._token: str | None = token  # Use JWT directly if provided
 
     def _get_token(self) -> str:
         if self._token:
             return self._token
 
+        # Fallback to email/password login
         b64_pass = base64.b64encode(self._password.encode()).decode()
         resp = httpx.post(
             f"{self.base_url}/api/v1/users/login",
@@ -82,7 +120,7 @@ class OpenMetadataClient:
             params: dict[str, Any] = {
                 "service": service_fqn,
                 "limit": 50,
-                "fields": "columns,tags",
+                "fields": "columns,tags,owners",
             }
             if after:
                 params["after"] = after
@@ -111,6 +149,15 @@ class OpenMetadataClient:
 
                 table_tags = [tag["tagFQN"] for tag in t.get("tags", [])]
 
+                owners = []
+                for o in t.get("owners", []):
+                    owners.append(
+                        OMOwner(
+                            name=o.get("displayName", o.get("name", "")),
+                            type=o.get("type", "user"),
+                        )
+                    )
+
                 tables.append(
                     OMTable(
                         fqn=fqn,
@@ -122,6 +169,7 @@ class OpenMetadataClient:
                         description=t.get("description", ""),
                         columns=columns,
                         tags=table_tags,
+                        owners=owners,
                     )
                 )
 
@@ -131,6 +179,78 @@ class OpenMetadataClient:
                 break
 
         return tables
+
+    def list_glossary_terms(self) -> list[OMGlossaryTerm]:
+        """List all glossary terms with relationships and asset links."""
+        terms: list[OMGlossaryTerm] = []
+        after: str | None = None
+
+        while True:
+            params: dict[str, Any] = {
+                "limit": 50,
+                "fields": "relatedTerms,synonyms,tags",
+            }
+            if after:
+                params["after"] = after
+
+            data = self._get("/api/v1/glossaryTerms", params)
+
+            for t in data.get("data", []):
+                related = [r.get("name", "") for r in t.get("relatedTerms", []) if r.get("name")]
+                synonyms = t.get("synonyms", [])
+                glossary_fqn = t.get("fullyQualifiedName", "")
+                glossary_name = glossary_fqn.split(".")[0] if "." in glossary_fqn else ""
+
+                terms.append(
+                    OMGlossaryTerm(
+                        name=t["name"],
+                        fqn=glossary_fqn,
+                        glossary=glossary_name,
+                        description=t.get("description", ""),
+                        synonyms=synonyms,
+                        related_terms=related,
+                    )
+                )
+
+            paging = data.get("paging", {})
+            after = paging.get("after")
+            if not after:
+                break
+
+        return terms
+
+    def get_table_lineage(self, table_fqn: str, upstream_depth: int = 3) -> list[OMLineageEdge]:
+        """Get upstream lineage edges for a table."""
+        edges: list[OMLineageEdge] = []
+        try:
+            data = self._get(
+                f"/api/v1/lineage/table/name/{table_fqn}",
+                {"upstreamDepth": upstream_depth, "downstreamDepth": 1},
+            )
+        except Exception:
+            return edges
+
+        # Build node ID → name lookup
+        entity_fqn = data.get("entity", {}).get("fullyQualifiedName", table_fqn)
+        node_map: dict[str, str] = {data.get("entity", {}).get("id", ""): entity_fqn}
+        for node in data.get("nodes", []):
+            node_map[node.get("id", "")] = node.get("fullyQualifiedName", node.get("name", ""))
+
+        for edge in data.get("upstreamEdges", []):
+            from_id = edge.get("fromEntity", "")
+            to_id = edge.get("toEntity", "")
+            from_fqn = node_map.get(from_id, from_id)
+            to_fqn = node_map.get(to_id, to_id)
+            edges.append(OMLineageEdge(from_fqn=from_fqn, to_fqn=to_fqn, type="upstream"))
+
+        for edge in data.get("downstreamEdges", []):
+            from_id = edge.get("fromEntity", "")
+            to_id = edge.get("toEntity", "")
+            from_fqn = node_map.get(from_id, from_id)
+            to_fqn = node_map.get(to_id, to_id)
+            edges.append(OMLineageEdge(from_fqn=from_fqn, to_fqn=to_fqn, type="downstream"))
+
+        return edges
 
     def health_check(self) -> bool:
         """Check if OM is reachable."""

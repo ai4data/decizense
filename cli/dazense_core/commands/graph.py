@@ -168,9 +168,13 @@ def gaps(
 
     # Auto-enrich from catalogs so gap analysis includes catalog-discovered PII
     base = Path(project_path) if project_path else Path.cwd()
-    om_dir = base / "openmetadata"
-    if om_dir.exists():
-        g.enrich_from_catalog(OpenMetadataCatalogProvider(), om_dir)
+    snapshot_path = base / "openmetadata" / "snapshot.json"
+    if snapshot_path.exists():
+        g.enrich_from_snapshot(snapshot_path)
+    else:
+        om_dir = base / "openmetadata"
+        if om_dir.exists():
+            g.enrich_from_catalog(OpenMetadataCatalogProvider(), om_dir)
 
     check_type = check or "all"
     total_gaps = 0
@@ -365,23 +369,30 @@ def enrich(
     base = Path(project_path) if project_path else Path.cwd()
     g = _compile(project_path)
 
-    # Registry of catalog providers and their expected directories
-    catalog_providers: list[tuple[CatalogEnrichmentProvider, Path]] = [
-        (OpenMetadataCatalogProvider(), base / "openmetadata"),
-    ]
-
     total_actions: list[str] = []
     before_nodes = g.node_count
     before_edges = g.edge_count
 
-    for provider, catalog_dir in catalog_providers:
-        if not catalog_dir.exists():
-            continue
-
-        actions = g.enrich_from_catalog(provider, catalog_dir)
+    # Prefer snapshot.json (V2) over YAML-based enrichment
+    snapshot_path = base / "openmetadata" / "snapshot.json"
+    if snapshot_path.exists():
+        actions = g.enrich_from_snapshot(snapshot_path)
         if actions:
-            console.print(f"[bold green]{provider.name}:[/bold green] {len(actions)} actions")
+            console.print(f"[bold green]Snapshot:[/bold green] {len(actions)} actions")
             total_actions.extend(actions)
+    else:
+        # Fallback to YAML-based catalog enrichment
+        catalog_providers: list[tuple[CatalogEnrichmentProvider, Path]] = [
+            (OpenMetadataCatalogProvider(), base / "openmetadata"),
+        ]
+        for provider, catalog_dir in catalog_providers:
+            if not catalog_dir.exists():
+                continue
+
+            actions = g.enrich_from_catalog(provider, catalog_dir)
+            if actions:
+                console.print(f"[bold green]{provider.name}:[/bold green] {len(actions)} actions")
+                total_actions.extend(actions)
 
     after_nodes = g.node_count
     after_edges = g.edge_count

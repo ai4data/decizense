@@ -606,6 +606,193 @@ class GovernanceGraph:
             if not already_exists:
                 self._add_edge(GraphEdge(from_=class_id, to=col_id, type=EdgeType.CLASSIFIES))
 
+    def enrich_from_snapshot(
+        self,
+        snapshot_path: Path,
+        tag_mappings: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Enrich graph from a governance snapshot (openmetadata/snapshot.json).
+
+        Reads the snapshot produced by `dazense sync -p openmetadata` and:
+        - Adds OM descriptions to matching table/column nodes
+        - Adds CLASSIFIES edges for PII-tagged columns
+        - Adds owner info to table node properties
+        - Adds tier/certification info to table node properties
+        - Creates GlossaryTerm nodes with DESCRIBES and RELATED_TO edges
+        - Creates PIPELINE_FEEDS edges from OMD lineage
+
+        Returns list of enrichment actions taken.
+        """
+        import json
+
+        if not snapshot_path.exists():
+            return []
+
+        data = json.loads(snapshot_path.read_text())
+        if data.get("version") not in (1, 2):
+            return []
+
+        mappings = tag_mappings or {"PII": "PII", "Sensitive": "PII", "PersonalData": "PII"}
+        actions: list[str] = []
+
+        # ── Tables & columns ──
+        for fqn, table_data in data.get("tables", {}).items():
+            schema_name = table_data.get("schema", "")
+            table_name = table_data.get("name", "")
+
+            matched_table_id = self._match_table(schema_name, table_name)
+            if not matched_table_id:
+                continue
+
+            table_node = self.get_node(matched_table_id)
+            if not table_node:
+                continue
+
+            # Enrich table with OM metadata
+            if table_data.get("description"):
+                table_node.properties["om_description"] = table_data["description"]
+            if table_data.get("owners"):
+                table_node.properties["om_owners"] = table_data["owners"]
+            if table_data.get("tags"):
+                table_node.properties["om_tags"] = table_data["tags"]
+                for tag in table_data["tags"]:
+                    if tag.startswith("Tier."):
+                        table_node.properties["om_tier"] = tag
+            actions.append(f"enriched table {matched_table_id} from snapshot")
+
+            # Enrich columns with PII tags
+            pii_columns = table_data.get("pii", {}).get("columns", [])
+            columns_data = table_data.get("columns", {})
+
+            for col_name, col_info in columns_data.items():
+                col_id = self._match_column(schema_name, table_name, col_name)
+
+                if col_id:
+                    col_node = self.get_node(col_id)
+                    if col_node:
+                        if col_info.get("description"):
+                            col_node.properties["om_description"] = col_info["description"]
+                        if col_info.get("tags"):
+                            col_node.properties["om_tags"] = col_info["tags"]
+                            self._classify_from_tags(col_id, col_info["tags"], mappings, "snapshot", actions)
+
+                        if col_name in pii_columns:
+                            col_node.properties["om_pii"] = True
+                            actions.append(f"marked {col_id} as PII from snapshot")
+
+        # ── Glossary terms ──
+        for term_fqn, term_data in data.get("glossary", {}).items():
+            term_id = f"glossary:{term_fqn}"
+
+            if not self.get_node(term_id):
+                self._add_node(
+                    GraphNode(
+                        id=term_id,
+                        type=NodeType.GlossaryTerm,
+                        properties={
+                            "name": term_data.get("name", ""),
+                            "glossary": term_data.get("glossary", ""),
+                            "description": term_data.get("description", ""),
+                            "synonyms": term_data.get("synonyms", []),
+                        },
+                    )
+                )
+                actions.append(f"created glossary term {term_id}")
+
+            # DESCRIBES edges: glossary term → matching tables/measures
+            # Match by checking if table tags contain this glossary term FQN
+            for table_fqn, table_data in data.get("tables", {}).items():
+                table_tags = table_data.get("tags", [])
+                if term_fqn in table_tags:
+                    matched_id = self._match_table(table_data.get("schema", ""), table_data.get("name", ""))
+                    if matched_id:
+                        self._add_edge(GraphEdge(from_=term_id, to=matched_id, type=EdgeType.DESCRIBES))
+                        actions.append(f"linked {term_id} -> {matched_id}")
+
+            # RELATED_TO edges between glossary terms
+            for related_name in term_data.get("related_terms", []):
+                # Find the related term's FQN
+                for other_fqn, other_data in data.get("glossary", {}).items():
+                    if other_data.get("name") == related_name:
+                        other_id = f"glossary:{other_fqn}"
+                        # Avoid duplicate edges
+                        already = any(
+                            e.from_ == term_id and e.to == other_id and e.type == EdgeType.RELATED_TO
+                            for e in self._forward.get(term_id, [])
+                        )
+                        if not already:
+                            self._add_edge(GraphEdge(from_=term_id, to=other_id, type=EdgeType.RELATED_TO))
+                        break
+
+        # ── Lineage ──
+        # Find the database ID from existing table nodes to build consistent IDs
+        db_id = ""
+        for node in self.get_nodes_by_type(NodeType.Table):
+            db_id = node.properties.get("database_id", "")
+            if db_id:
+                break
+
+        for edge_data in data.get("lineage", []):
+            from_fqn = edge_data.get("from", "")
+            to_fqn = edge_data.get("to", "")
+
+            from_parts = from_fqn.split(".")
+            to_parts = to_fqn.split(".")
+
+            from_schema = from_parts[2] if len(from_parts) > 2 else ""
+            from_table = from_parts[3] if len(from_parts) > 3 else from_parts[-1]
+            to_schema = to_parts[2] if len(to_parts) > 2 else ""
+            to_table = to_parts[3] if len(to_parts) > 3 else to_parts[-1]
+
+            from_id = self._match_table(from_schema, from_table)
+            to_id = self._match_table(to_schema, to_table)
+
+            # Create discovered table nodes for lineage endpoints not in the bundle
+            if not from_id and db_id:
+                from_id = f"table:{db_id}/{from_schema}.{from_table}"
+                if not self.get_node(from_id):
+                    self._add_node(
+                        GraphNode(
+                            id=from_id,
+                            type=NodeType.Table,
+                            properties={
+                                "schema": from_schema,
+                                "table": from_table,
+                                "database_id": db_id,
+                                "source": "lineage",
+                            },
+                        )
+                    )
+                    actions.append(f"discovered table {from_id} from lineage")
+
+            if not to_id and db_id:
+                to_id = f"table:{db_id}/{to_schema}.{to_table}"
+                if not self.get_node(to_id):
+                    self._add_node(
+                        GraphNode(
+                            id=to_id,
+                            type=NodeType.Table,
+                            properties={
+                                "schema": to_schema,
+                                "table": to_table,
+                                "database_id": db_id,
+                                "source": "lineage",
+                            },
+                        )
+                    )
+                    actions.append(f"discovered table {to_id} from lineage")
+
+            if from_id and to_id:
+                already = any(
+                    e.from_ == from_id and e.to == to_id and e.type == EdgeType.PIPELINE_FEEDS
+                    for e in self._forward.get(from_id, [])
+                )
+                if not already:
+                    self._add_edge(GraphEdge(from_=from_id, to=to_id, type=EdgeType.PIPELINE_FEEDS))
+                    actions.append(f"lineage {from_id} -> {to_id}")
+
+        return actions
+
     def _match_table(self, schema_name: str, table_name: str) -> str | None:
         """Find a table node matching schema.table across all database IDs."""
         for node in self.get_nodes_by_type(NodeType.Table):

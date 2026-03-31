@@ -5,19 +5,22 @@ tables:
 - name: customers
   fqn: jaffle_shop_postgres.jaffle_shop.main.customers
   table_type: Regular
-  description: ''
+  description: 'Customer dimension table. Contains one row per customer with name,
+    order history, and lifetime value. PII columns: first_name, last_name.'
   columns:
   - name: customer_id
     data_type: INT
     description: Primary key
   - name: first_name
     data_type: VARCHAR
-    description: Customer first name (PII)
-    tags: ["PII.Name"]
+    description: Customer first name (PII - blocked by policy)
+    tags:
+    - PII.Sensitive
   - name: last_name
     data_type: VARCHAR
-    description: Customer last name (PII)
-    tags: ["PII.Name"]
+    description: Customer last name (PII - blocked by policy)
+    tags:
+    - PII.Sensitive
   - name: first_order
     data_type: DATE
     description: Date of first order
@@ -27,17 +30,19 @@ tables:
   - name: number_of_orders
     data_type: BIGINT
     description: Total number of orders
-  - name: email
-    data_type: VARCHAR
-    description: Customer email address
-    tags: ["PII.Email"]
   - name: customer_lifetime_value
     data_type: DOUBLE
-    description: Sum of all order amounts
+    description: Total value (AUD) of all orders placed by this customer
+  tags:
+  - JaffleShopGlossary.CustomerLifetimeValue
+  - JaffleShopGlossary.PersonallyIdentifiableInformation
+  - Tier.Tier1
 - name: orders
   fqn: jaffle_shop_postgres.jaffle_shop.main.orders
   table_type: Regular
-  description: ''
+  description: Order fact table. Contains one row per order with status, amount, and
+    payment method breakdowns. Revenue metrics must exclude returned and return_pending
+    orders.
   columns:
   - name: order_id
     data_type: INT
@@ -66,6 +71,11 @@ tables:
   - name: amount
     data_type: DOUBLE
     description: Total order amount
+  tags:
+  - JaffleShopGlossary.OrderStatus
+  - JaffleShopGlossary.PaymentMethod
+  - JaffleShopGlossary.Revenue
+  - Tier.Tier1
 - name: raw_customers
   fqn: jaffle_shop_postgres.jaffle_shop.main.raw_customers
   table_type: Regular
@@ -148,7 +158,8 @@ tables:
 - name: stg_payments
   fqn: jaffle_shop_postgres.jaffle_shop.main.stg_payments
   table_type: View
-  description: ''
+  description: Staging payments table. Individual payment transactions. Orders can
+    have split payments across methods (credit card, coupon, bank transfer, gift card).
   columns:
   - name: payment_id
     data_type: INT
@@ -162,3 +173,6 @@ tables:
   - name: amount
     data_type: DOUBLE
     description: Payment amount
+  tags:
+  - JaffleShopGlossary.PaymentMethod
+  - Tier.Tier2
