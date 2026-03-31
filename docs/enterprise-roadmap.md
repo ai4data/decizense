@@ -186,7 +186,84 @@ OMD data products with ODCS (Open Data Contract Standard) contracts. Bundles aut
 
 ---
 
-## 10. Multi-LLM / Multi-Agent
+## 10. AI-Assisted Data Discovery & Bundle Creation (V2b)
+
+### Current
+
+Users must know what data exists before they can create a dataset bundle. Discovery happens manually — browsing OMD UI or asking a data engineer. The `dataset.yaml` trust boundary is hand-authored.
+
+### Enterprise Target
+
+An AI agent helps users discover relevant data by querying the OMD catalog. The user describes their use case in natural language, the agent searches OMD for matching tables, glossary terms, lineage, and ownership — then proposes a dataset bundle. The user reviews and approves.
+
+### User Workflow
+
+```
+1. User: "I want to analyze customer retention"
+2. Agent queries OMD catalog:
+   - Semantic search for "retention" → finds glossary terms (ReturningCustomer, NewCustomer, CLV)
+   - Follows glossary → asset links → finds customers, orders tables
+   - Checks lineage → discovers upstream pipeline (raw → staging → final)
+   - Checks ownership → Data Team owns these tables
+   - Checks quality → tables are Tier1, passing DQ tests
+   - Checks classifications → first_name/last_name are PII
+3. Agent presents findings:
+   "I found 3 relevant tables in the Retail domain:
+    - customers (Tier1, owned by Data Team) — lifetime value, order history
+    - orders (Tier1) — dates, status, amounts
+    - stg_payments — payment methods
+    Connected via customer_id. PII columns: first_name, last_name."
+4. User: "I don't need payments, just customers and orders"
+5. Agent generates dataset.yaml:
+   - Tables: customers, orders
+   - Joins: orders.customer_id → customers.customer_id
+   - Time filters: orders.order_date required
+   - PII: first_name, last_name blocked
+   - Use cases: retention analysis
+6. User reviews, edits if needed, approves
+```
+
+### Implementation Approaches
+
+**Option A: dazense agent with OMD search tool**
+
+- Add a `discover_data` agent tool that calls OMD's search/glossary APIs
+- Agent uses existing dazense chat UI
+- Works within the current architecture
+- OMD endpoints: `/api/v1/search/query`, `/api/v1/glossaryTerms`, `/api/v1/lineage`
+
+**Option B: OMD AI SDK integration**
+
+- OMD 1.12 has AI capabilities (NLQ search, semantic search, vector search)
+- `/api/v1/search/nlq/query` — natural language search over the catalog
+- `/api/v1/search/vector/query` — semantic similarity search
+- dazense delegates discovery to OMD's AI layer, focuses on bundle generation
+
+**Option C: MCP server for OMD catalog**
+
+- Build an MCP server that exposes OMD catalog as tools
+- Any AI agent (dazense, Claude, ChatGPT) can discover data via MCP
+- Most flexible — decouples discovery from dazense's agent
+
+### Bundle Generation Logic
+
+From OMD discovery results, auto-generate `dataset.yaml`:
+
+- **Tables**: from search results, filtered by user selection
+- **Joins**: from OMD lineage edges between selected tables
+- **Time filters**: from OMD profiler (date columns with temporal patterns)
+- **PII columns**: from OMD PII tags → auto-populate `policy.yml`
+- **Ownership**: from OMD table owners
+- **Certification**: from OMD tier tags
+- **Use cases**: from user's original question + glossary terms
+
+### Key Principle
+
+The user does NOT need to know the technical schema. They describe their business need, the agent discovers the data, and the bundle is generated. The governance team's work in OMD (tagging, describing, classifying) directly enables self-service discovery.
+
+---
+
+## 11. Multi-LLM / Multi-Agent
 
 ### Current
 
@@ -209,9 +286,10 @@ Multiple agents with different identities and access levels. Agent selection bas
 
 ## Priority Order
 
-| Phase    | Features                                                               | Dependency               |
-| -------- | ---------------------------------------------------------------------- | ------------------------ |
-| V2 (now) | Snapshot sync, policy generation, glossary + lineage in graph          | OMD configured           |
-| V3       | OPA policy engine, structured audit trail, quality gates               | OPA deployment           |
-| V4       | Event-driven sync (webhooks), agent auth (OAuth/WIMSE), domain scoping | Webhook infrastructure   |
-| V5       | Data products/contracts, multi-agent, auto-bundle generation           | Full OMD data mesh setup |
+| Phase      | Features                                                               | Dependency               |
+| ---------- | ---------------------------------------------------------------------- | ------------------------ |
+| V2a (done) | Snapshot sync, policy generation, glossary + lineage in graph          | OMD configured           |
+| V2b        | AI-assisted data discovery, bundle generation from OMD catalog         | V2a + OMD search/AI APIs |
+| V3         | OPA policy engine, structured audit trail, quality gates               | OPA deployment           |
+| V4         | Event-driven sync (webhooks), agent auth (OAuth/WIMSE), domain scoping | Webhook infrastructure   |
+| V5         | Data products/contracts, multi-agent, auto-bundle generation           | Full OMD data mesh setup |
