@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .base import SyncProvider, SyncResult
 from .databases.provider import DatabaseSyncProvider
 from .notion.provider import NotionSyncProvider
-from .openmetadata.provider import OpenMetadataSyncProvider
+from .openmetadata.provider import OpenMetadataSyncProvider  # Provider handles all catalog types for now
 from .repositories.provider import RepositorySyncProvider
 
 # Provider registry mapping CLI-friendly names to provider instances
@@ -13,7 +13,7 @@ PROVIDER_REGISTRY: dict[str, SyncProvider] = {
     "notion": NotionSyncProvider(),
     "repositories": RepositorySyncProvider(),
     "databases": DatabaseSyncProvider(),
-    "openmetadata": OpenMetadataSyncProvider(),
+    "catalog": OpenMetadataSyncProvider(),
 }
 
 # Default providers in order of execution
@@ -75,6 +75,7 @@ __all__ = [
     "SyncResult",
     "ProviderSelection",
     "DatabaseSyncProvider",
+    "CatalogSyncProvider",
     "OpenMetadataSyncProvider",
     "RepositorySyncProvider",
     "PROVIDER_REGISTRY",

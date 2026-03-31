@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from dazense_core.ui import UI, ask_confirm, ask_select
 
+from .catalog import CatalogConfig
 from .databases import DATABASE_CONFIG_CLASSES, AnyDatabaseConfig, DatabaseType, parse_database_config
 from .llm import LLMConfig
 from .mcp import McpConfig
@@ -35,14 +36,29 @@ class DazenseConfig(BaseModel):
     llm: LLMConfig | None = Field(default=None, description="The LLM configuration")
     slack: SlackConfig | None = Field(default=None, description="The Slack configuration")
     mcp: McpConfig | None = Field(default=None, description="The MCP configuration")
-    openmetadata: OpenMetadataConfig | None = Field(default=None, description="The OpenMetadata configuration")
+    catalog: CatalogConfig | None = Field(default=None, description="The catalog platform configuration")
+    openmetadata: OpenMetadataConfig | None = Field(default=None, description="Deprecated: use catalog instead")
 
     @model_validator(mode="before")
     @classmethod
     def parse_databases(cls, data: dict) -> dict:
-        """Parse database configs into their specific types."""
+        """Parse database configs and migrate legacy openmetadata to catalog."""
         if "databases" in data and isinstance(data["databases"], list):
             data["databases"] = [parse_database_config(db) if isinstance(db, dict) else db for db in data["databases"]]
+
+        # Backward compatibility: migrate openmetadata → catalog
+        if "openmetadata" in data and "catalog" not in data:
+            om = data["openmetadata"]
+            if isinstance(om, dict):
+                data["catalog"] = {
+                    "provider": "openmetadata",
+                    "url": om.get("url", "http://localhost:8585"),
+                    "token": om.get("token"),
+                    "email": om.get("email", "admin@open-metadata.org"),
+                    "password": om.get("password", "admin"),
+                    "services": om.get("services", []),
+                    "tag_mappings": om.get("tag_mappings", {}),
+                }
         return data
 
     @classmethod

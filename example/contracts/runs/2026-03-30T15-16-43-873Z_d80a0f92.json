@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "contract_id": "d80a0f92",
+  "created_at": "2026-03-30T15:16:43.873Z",
+  "project_path": "C:/Users/hzmarrou/OneDrive/python/learning/dazense/example",
+  "actor": {
+    "role": "user",
+    "user_id": "local"
+  },
+  "request": {
+    "user_prompt": "Total revenue all time, net (exclude returned and return_pending)",
+    "intent": "metric_query",
+    "ambiguity": {
+      "is_ambiguous": false,
+      "notes": []
+    }
+  },
+  "scope": {
+    "dataset_bundles": [
+      "jaffle_shop"
+    ],
+    "tables": [
+      "main.orders"
+    ],
+    "approved_joins": [
+      {
+        "left_table": "main.orders",
+        "left_column": "customer_id",
+        "right_table": "main.customers",
+        "right_column": "customer_id"
+      },
+      {
+        "left_table": "main.stg_payments",
+        "left_column": "order_id",
+        "right_table": "main.orders",
+        "right_column": "order_id"
+      }
+    ],
+    "time_columns": {
+      "main.orders": "order_date"
+    },
+    "time_window": {
+      "type": "all_time",
+      "resolved_start": "2018-01-01",
+      "resolved_end": "2018-04-09"
+    }
+  },
+  "meaning": {
+    "metrics": [
+      {
+        "id": "orders.total_revenue"
+      }
+    ],
+    "guidance_rules_referenced": [
+      "exclude_returned_orders_from_revenue",
+      "order_amount_equals_payment_sum",
+      "net_revenue_definition",
+      "orders_require_time_filter",
+      "payment_method_breakdown",
+      "order_status_definitions"
+    ]
+  },
+  "execution": {
+    "tool": "query_metrics",
+    "params": {}
+  },
+  "policy": {
+    "decision": "allow",
+    "checks": [
+      {
+        "name": "ambiguity_check",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_required",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_tables_only",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_join_allowlist",
+        "status": "pass"
+      },
+      {
+        "name": "pii_block",
+        "status": "pass"
+      },
+      {
+        "name": "time_filter_required",
+        "status": "pass"
+      },
+      {
+        "name": "limit_check",
+        "status": "pass"
+      },
+      {
+        "name": "metric_exists",
+        "status": "pass",
+        "detail": "orders.total_revenue found in semantic model."
+      },
+      {
+        "name": "metric_table_in_bundle",
+        "status": "pass",
+        "detail": "Table \"orders\" is in bundle \"jaffle_shop\"."
+      },
+      {
+        "name": "execution_allowed",
+        "status": "pass"
+      },
+      {
+        "name": "business_rules",
+        "status": "pass",
+        "detail": "2 critical rule(s) apply: exclude_returned_orders_from_revenue, order_amount_equals_payment_sum. Guidance enforced via semantic model filters."
+      },
+      {
+        "name": "business_rules_advisory",
+        "status": "pass",
+        "detail": "4 advisory rule(s) noted: net_revenue_definition, orders_require_time_filter, payment_method_breakdown, order_status_definitions."
+      }
+    ]
+  }
+}

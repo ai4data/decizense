@@ -21,33 +21,42 @@ console = create_console()
 
 def _get_client(config: DazenseConfig) -> OpenMetadataClient:
     """Build an OM client from config or env vars."""
-    om = config.openmetadata
-    if om:
-        url = om.url
-        token = om.token or os.environ.get("OMD_BOT_TOKEN")
-        email = om.email
-        password = om.password
+    cat = config.catalog
+    if cat and cat.provider == "openmetadata":
+        url = cat.url
+        token = cat.token or os.environ.get("CATALOG_TOKEN") or os.environ.get("OMD_BOT_TOKEN")
+        email = cat.email
+        password = cat.password
+    elif config.openmetadata:
+        # Legacy backward compat
+        url = config.openmetadata.url
+        token = config.openmetadata.token or os.environ.get("CATALOG_TOKEN") or os.environ.get("OMD_BOT_TOKEN")
+        email = config.openmetadata.email
+        password = config.openmetadata.password
     else:
-        url = os.environ.get("OPENMETADATA_URL", "http://localhost:8585")
-        token = os.environ.get("OMD_BOT_TOKEN")
-        email = os.environ.get("OPENMETADATA_EMAIL", "admin@open-metadata.org")
-        password = os.environ.get("OPENMETADATA_PASSWORD", "admin")
+        url = os.environ.get("CATALOG_URL", "http://localhost:8585")
+        token = os.environ.get("CATALOG_TOKEN") or os.environ.get("OMD_BOT_TOKEN")
+        email = os.environ.get("CATALOG_EMAIL", "admin@open-metadata.org")
+        password = os.environ.get("CATALOG_PASSWORD", "admin")
     return OpenMetadataClient(url, token=token, email=email, password=password)
 
 
+CatalogSyncProvider = None  # Forward reference, defined below
+
+
 class OpenMetadataSyncProvider(SyncProvider):
-    """Provider that syncs metadata from OpenMetadata into local YAML files.
+    """Provider that syncs metadata from a catalog platform into local files.
 
     Fetches table schemas, column metadata, tags, and descriptions from
-    the OpenMetadata API and writes them to openmetadata/<service>/<db>/<schema>/tables.yml.
+    the catalog API and writes them to catalog/<service>/<db>/<schema>/tables.yml.
 
-    If openmetadata.services is set in dazense_config.yaml, only those services
-    are synced. Otherwise, all services are discovered from the OM API.
+    Currently supports OpenMetadata. Other providers (Atlan, Collibra, Purview)
+    can be added by implementing the same client interface.
     """
 
     @property
     def name(self) -> str:
-        return "OpenMetadata"
+        return "Catalog"
 
     @property
     def emoji(self) -> str:
@@ -55,13 +64,13 @@ class OpenMetadataSyncProvider(SyncProvider):
 
     @property
     def default_output_dir(self) -> str:
-        return "openmetadata"
+        return "catalog"
 
     def get_items(self, config: DazenseConfig) -> list[Any]:
-        """Return list of OM service names to sync.
+        """Return list of catalog service names to sync.
 
-        If config.openmetadata.services is set, use that list.
-        Otherwise, discover all services from the OM API.
+        If config.catalog.services is set, use that list.
+        Otherwise, discover all services from the catalog API.
         """
         try:
             client = _get_client(config)
@@ -69,6 +78,11 @@ class OpenMetadataSyncProvider(SyncProvider):
                 return []
 
             # Use configured services if specified
+            cat = config.catalog
+            if cat and cat.services:
+                return list(cat.services)
+
+            # Legacy backward compat
             om = config.openmetadata
             if om and om.services:
                 return list(om.services)
@@ -80,7 +94,9 @@ class OpenMetadataSyncProvider(SyncProvider):
             return []
 
     def should_sync(self, config: DazenseConfig) -> bool:
-        """Check if OM is configured or reachable."""
+        """Check if catalog is configured or reachable."""
+        if config.catalog:
+            return True
         if config.openmetadata:
             return True
         return len(self.get_items(config)) > 0
@@ -310,7 +326,7 @@ def _generate_policy_from_snapshot(snapshot: dict, policy_path: Path) -> bool:
     # Build policy: merge OMD-derived PII with existing execution settings
     policy: dict[str, Any] = {
         "version": 1,
-        "# NOTE": "PII columns auto-generated from OpenMetadata tags. Do not edit manually.",
+        "# NOTE": "PII columns auto-generated from catalog tags. Do not edit manually.",
         "defaults": existing.get(
             "defaults",
             {

@@ -18,4 +18,6 @@ dazense-chat-server*
 
 rsa_key.*
 nul.venv-om/
+.catalog-token
 .omd-bot-token
+.venv-om/

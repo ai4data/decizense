@@ -168,11 +168,11 @@ def gaps(
 
     # Auto-enrich from catalogs so gap analysis includes catalog-discovered PII
     base = Path(project_path) if project_path else Path.cwd()
-    snapshot_path = base / "openmetadata" / "snapshot.json"
+    snapshot_path = base / "catalog" / "snapshot.json"
     if snapshot_path.exists():
         g.enrich_from_snapshot(snapshot_path)
     else:
-        om_dir = base / "openmetadata"
+        om_dir = base / "catalog"
         if om_dir.exists():
             g.enrich_from_catalog(OpenMetadataCatalogProvider(), om_dir)
 
@@ -361,7 +361,7 @@ def enrich(
     discovered columns, data types, descriptions, and tags into the governance graph.
 
     Supported catalogs: OpenMetadata (more coming).
-    Run `dazense sync -p openmetadata` first to pull catalog metadata.
+    Run `dazense sync -p catalog` first to pull catalog metadata.
     """
     from dazense_core.graph.catalog import CatalogEnrichmentProvider, OpenMetadataCatalogProvider
 
@@ -374,7 +374,7 @@ def enrich(
     before_edges = g.edge_count
 
     # Prefer snapshot.json (V2) over YAML-based enrichment
-    snapshot_path = base / "openmetadata" / "snapshot.json"
+    snapshot_path = base / "catalog" / "snapshot.json"
     if snapshot_path.exists():
         actions = g.enrich_from_snapshot(snapshot_path)
         if actions:
@@ -383,7 +383,7 @@ def enrich(
     else:
         # Fallback to YAML-based catalog enrichment
         catalog_providers: list[tuple[CatalogEnrichmentProvider, Path]] = [
-            (OpenMetadataCatalogProvider(), base / "openmetadata"),
+            (OpenMetadataCatalogProvider(), base / "catalog"),
         ]
         for provider, catalog_dir in catalog_providers:
             if not catalog_dir.exists():
@@ -418,7 +418,7 @@ def enrich(
             console.print(f"  [magenta]Classifications:[/magenta] {len(classified)} from catalog tags")
     else:
         console.print("[dim]No catalog directories found or no metadata matched graph nodes.[/dim]")
-        console.print("[dim]Run `dazense sync -p openmetadata` first to pull catalog metadata.[/dim]")
+        console.print("[dim]Run `dazense sync -p catalog` first to pull catalog metadata.[/dim]")
     console.print()
 
 

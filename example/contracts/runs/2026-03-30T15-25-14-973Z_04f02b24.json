@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "contract_id": "04f02b24",
+  "created_at": "2026-03-30T15:25:14.973Z",
+  "project_path": "C:/Users/hzmarrou/OneDrive/python/learning/dazense/example",
+  "actor": {
+    "role": "user",
+    "user_id": "local"
+  },
+  "request": {
+    "user_prompt": "Show me top 10 customers by lifetime value",
+    "intent": "metric_query",
+    "ambiguity": {
+      "is_ambiguous": false,
+      "notes": []
+    }
+  },
+  "scope": {
+    "dataset_bundles": [
+      "jaffle_shop"
+    ],
+    "tables": [
+      "main.customers"
+    ],
+    "approved_joins": [
+      {
+        "left_table": "main.orders",
+        "left_column": "customer_id",
+        "right_table": "main.customers",
+        "right_column": "customer_id"
+      },
+      {
+        "left_table": "main.stg_payments",
+        "left_column": "order_id",
+        "right_table": "main.orders",
+        "right_column": "order_id"
+      }
+    ],
+    "time_columns": {
+      "main.orders": "order_date"
+    }
+  },
+  "meaning": {
+    "metrics": [
+      {
+        "id": "customers.total_lifetime_value"
+      }
+    ],
+    "guidance_rules_referenced": [
+      "customer_type_classification",
+      "lifetime_value_consistency",
+      "pii_customer_names"
+    ]
+  },
+  "execution": {
+    "tool": "query_metrics",
+    "params": {}
+  },
+  "policy": {
+    "decision": "allow",
+    "checks": [
+      {
+        "name": "ambiguity_check",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_required",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_tables_only",
+        "status": "pass"
+      },
+      {
+        "name": "bundle_join_allowlist",
+        "status": "pass"
+      },
+      {
+        "name": "pii_block",
+        "status": "pass"
+      },
+      {
+        "name": "time_filter_required",
+        "status": "pass"
+      },
+      {
+        "name": "limit_check",
+        "status": "pass"
+      },
+      {
+        "name": "metric_exists",
+        "status": "pass",
+        "detail": "customers.total_lifetime_value found in semantic model."
+      },
+      {
+        "name": "metric_table_in_bundle",
+        "status": "pass",
+        "detail": "Table \"customers\" is in bundle \"jaffle_shop\"."
+      },
+      {
+        "name": "execution_allowed",
+        "status": "pass"
+      },
+      {
+        "name": "business_rules",
+        "status": "pass",
+        "detail": "2 critical rule(s) apply: lifetime_value_consistency, pii_customer_names. Guidance enforced via semantic model filters."
+      },
+      {
+        "name": "business_rules_advisory",
+        "status": "pass",
+        "detail": "1 advisory rule(s) noted: customer_type_classification."
+      }
+    ]
+  }
+}

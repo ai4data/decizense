@@ -1,4 +1,5 @@
 from .base import DazenseConfig, DazenseConfigError
+from .catalog import CatalogConfig
 from .databases import (
     AnyDatabaseConfig,
     BigQueryConfig,
@@ -26,6 +27,7 @@ __all__ = [
     "LLMConfig",
     "LLMProvider",
     "SlackConfig",
+    "CatalogConfig",
     "OpenMetadataConfig",
     "InitError",
 ]

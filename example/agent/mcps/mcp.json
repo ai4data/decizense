@@ -4,7 +4,7 @@
       "type": "http",
       "url": "http://localhost:8585/mcp",
       "headers": {
-        "Authorization": "Bearer {{ env('OMD_BOT_TOKEN') }}"
+        "Authorization": "Bearer {{ env('CATALOG_TOKEN') }}"
       }
     }
   }
