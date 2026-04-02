@@ -1,12 +1,10 @@
 import { z } from 'zod/v4';
 
-import { executeQuery } from '../agents/tools/execute-sql';
 import type { App } from '../app';
 import { authMiddleware } from '../middleware/auth';
 import { ModelSelection } from '../services/agent.service';
 import { TestAgentService, testAgentService } from '../services/test-agent.service';
 import { llmProviderSchema } from '../types/llm';
-import { retrieveProjectById } from '../utils/chat';
 
 const modelSelectionSchema = z.object({
 	provider: llmProviderSchema,
@@ -18,7 +16,7 @@ export const testRoutes = async (app: App) => {
 
 	/**
 	 * Run a single prompt without persisting to a chat.
-	 * Used for testing/evaluation purposes from the CLI.
+	 * Used for testing/evaluation purposes.
 	 */
 	app.post(
 		'/run',
@@ -27,13 +25,12 @@ export const testRoutes = async (app: App) => {
 				body: z.object({
 					prompt: z.string(),
 					model: modelSelectionSchema,
-					sql: z.string(),
 				}),
 			},
 		},
 		async (request, reply) => {
 			const projectId = request.project?.id;
-			const { prompt, model, sql } = request.body;
+			const { prompt, model } = request.body;
 
 			if (!projectId) {
 				return reply
@@ -44,22 +41,6 @@ export const testRoutes = async (app: App) => {
 			try {
 				const modelSelection = model as ModelSelection | undefined;
 				const result = await testAgentService.runTest(projectId, prompt, modelSelection);
-				const project = await retrieveProjectById(projectId);
-
-				let verification;
-				if (sql) {
-					const { data: expectedData, columns: expectedColumns } = await executeQuery(
-						{ sql_query: sql },
-						{ projectFolder: project.path! },
-					);
-					const { data } = await testAgentService.runVerification(
-						projectId,
-						result,
-						expectedColumns,
-						modelSelection,
-					);
-					verification = { data, expectedData, expectedColumns };
-				}
 
 				return reply.send({
 					text: result.text,
@@ -68,7 +49,6 @@ export const testRoutes = async (app: App) => {
 					cost: result.cost,
 					finishReason: result.finishReason,
 					durationMs: result.durationMs,
-					verification,
 				});
 			} catch (err) {
 				const message = err instanceof Error ? err.message : 'Unknown error';

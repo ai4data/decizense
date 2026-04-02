@@ -5,9 +5,8 @@
 		"apps/*"
 	],
 	"scripts": {
-		"dev": "npm-run-all -lp dev:backend dev:frontend dev:fastapi",
+		"dev": "npm-run-all -lp dev:backend dev:frontend",
 		"dev:backend": "npm run dev -w @dazense/backend",
-		"dev:fastapi": "npm run fastapi -w @dazense/backend",
 		"dev:frontend": "npm run dev -w @dazense/frontend",
 		"lint": "npm-run-all -lp lint:backend lint:frontend lint:shared",
 		"lint:backend": "npm run lint -w @dazense/backend",
@@ -19,9 +18,6 @@
 		"lint:fix:shared": "npm run lint:fix -w @dazense/shared",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"cli:fix": "uv run --directory cli ruff check --select I . --fix && uv run --directory cli ruff format",
-		"cli:check": "uv run --directory cli ty check && uv run --directory cli ruff check && uv run --directory cli ruff check --select I . && uv run --directory cli ruff format --check",
-		"build:cli": "cd cli && python build.py -f",
 		"release": "./scripts/release.sh",
 		"prepare": "husky",
 		"pg:start": "docker compose up -d",

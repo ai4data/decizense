@@ -29,8 +29,12 @@ export const DisplayChartToolCall = () => {
 
 		for (const message of messages) {
 			for (const part of message.parts) {
-				if (part.type === 'tool-execute_sql' && part.output && part.output.id === config.query_id) {
-					return part.output;
+				if (
+					part.type === ('tool-execute_sql' as string) &&
+					(part as any).output &&
+					(part as any).output.id === config.query_id
+				) {
+					return (part as any).output;
 				}
 			}
 		}
