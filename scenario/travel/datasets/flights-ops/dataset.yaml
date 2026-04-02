@@ -1,0 +1,33 @@
+bundle_id: flights-ops
+display_name: Flight Operations
+description: >
+  Flight schedules, delays, airports, and airlines. Used by the flight
+  operations agent for disruption analysis and connection assessment.
+owner: flight-ops-team
+certification: certified
+
+tables:
+  - schema: public
+    table: flights
+  - schema: public
+    table: airports
+  - schema: public
+    table: airlines
+  - schema: public
+    table: flight_delays
+
+joins:
+  - left: { schema: public, table: flights, column: origin }
+    right: { schema: public, table: airports, column: airport_code }
+  - left: { schema: public, table: flights, column: destination }
+    right: { schema: public, table: airports, column: airport_code }
+  - left: { schema: public, table: flights, column: airline_code }
+    right: { schema: public, table: airlines, column: airline_code }
+  - left: { schema: public, table: flight_delays, column: flight_id }
+    right: { schema: public, table: flights, column: flight_id }
+
+time_filters:
+  - table: flights
+    column: scheduled_departure
+    required: true
+    max_days: 90

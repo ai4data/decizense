@@ -1,0 +1,200 @@
+models:
+
+  # Flight Operations Model
+  - name: flights
+    table: { schema: public, table: flights }
+    description: Flight schedules and operational status
+    time_dimension: scheduled_departure
+
+    dimensions:
+      - name: flight_number
+        column: flight_number
+        description: Airline flight number (e.g. SJ412)
+      - name: airline
+        column: airline_code
+        description: Operating airline code
+      - name: origin
+        column: origin
+        description: Departure airport code
+      - name: destination
+        column: destination
+        description: Arrival airport code
+      - name: status
+        column: status
+        description: "Flight status: scheduled, boarding, departed, arrived, cancelled, delayed"
+      - name: aircraft_type
+        column: aircraft_type
+        description: Aircraft model (A320, B777, etc.)
+      - name: scheduled_departure
+        column: scheduled_departure
+        type: time
+        description: Scheduled departure timestamp
+
+    measures:
+      - name: total_flights
+        column: flight_id
+        aggregation: count
+        description: Total number of flights
+      - name: delayed_flights
+        column: flight_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: delayed
+        description: Number of flights currently delayed
+      - name: cancelled_flights
+        column: flight_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: cancelled
+        description: Number of cancelled flights
+      - name: avg_capacity
+        column: capacity
+        aggregation: avg
+        description: Average aircraft seat capacity
+      - name: total_capacity
+        column: capacity
+        aggregation: sum
+        description: Total available seats across flights
+
+  # Booking Model
+  - name: bookings
+    table: { schema: public, table: bookings }
+    description: Customer flight bookings
+    time_dimension: booking_date
+
+    dimensions:
+      - name: booking_status
+        column: status
+        description: "Booking status: pending, confirmed, cancelled, completed"
+      - name: currency
+        column: currency
+        description: Booking currency
+      - name: booking_date
+        column: booking_date
+        type: time
+        description: When the booking was made
+
+    measures:
+      - name: total_bookings
+        column: booking_id
+        aggregation: count
+        description: Total number of bookings
+      - name: confirmed_bookings
+        column: booking_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: confirmed
+        description: Number of confirmed bookings
+      - name: cancelled_bookings
+        column: booking_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: cancelled
+        description: Number of cancelled bookings
+      - name: total_revenue
+        column: total_amount
+        aggregation: sum
+        filters:
+          - column: status
+            operator: "!="
+            value: cancelled
+        description: Total revenue from non-cancelled bookings
+      - name: avg_booking_value
+        column: total_amount
+        aggregation: avg
+        filters:
+          - column: status
+            operator: "!="
+            value: cancelled
+        description: Average booking value (excluding cancellations)
+
+  # Delay Analysis Model
+  - name: delays
+    table: { schema: public, table: flight_delays }
+    description: Flight delay records and root causes
+
+    dimensions:
+      - name: delay_reason
+        column: reason
+        description: "Cause of delay: weather, technical, crew, congestion, late_aircraft, security"
+      - name: reported_at
+        column: reported_at
+        type: time
+        description: When the delay was reported
+
+    measures:
+      - name: total_delays
+        column: delay_id
+        aggregation: count
+        description: Total number of delay events
+      - name: avg_delay_minutes
+        column: delay_minutes
+        aggregation: avg
+        description: Average delay duration in minutes
+      - name: max_delay_minutes
+        column: delay_minutes
+        aggregation: max
+        description: Maximum delay duration in minutes
+      - name: total_delay_minutes
+        column: delay_minutes
+        aggregation: sum
+        description: Total accumulated delay minutes
+
+  # Payment Model
+  - name: payments
+    table: { schema: public, table: payments }
+    description: Payment transactions for bookings
+
+    dimensions:
+      - name: payment_method
+        column: method
+        description: "Payment method: credit_card, debit_card, bank_transfer, wallet"
+      - name: payment_status
+        column: status
+        description: "Payment status: pending, success, failed, refunded"
+
+    measures:
+      - name: total_payments
+        column: payment_id
+        aggregation: count
+        description: Total number of payment transactions
+      - name: successful_payments
+        column: payment_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: success
+        description: Number of successful payments
+      - name: failed_payments
+        column: payment_id
+        aggregation: count
+        filters:
+          - column: status
+            operator: "="
+            value: failed
+        description: Number of failed payments
+      - name: total_payment_amount
+        column: amount
+        aggregation: sum
+        filters:
+          - column: status
+            operator: "="
+            value: success
+        description: Total amount of successful payments
+      - name: refunded_amount
+        column: amount
+        aggregation: sum
+        filters:
+          - column: status
+            operator: "="
+            value: refunded
+        description: Total refunded amount

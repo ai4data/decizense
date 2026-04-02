@@ -1,0 +1,61 @@
+# Auto-generated from catalog tags + manual overrides
+version: 1
+
+defaults:
+  max_rows: 500
+  max_preview_rows: 50
+  require_limit_for_raw_rows: true
+  require_time_filter_for_fact_tables: true
+  time_filter_max_days_default: 90
+
+pii:
+  mode: block
+  tags:
+    - PII
+    - PersonalData
+  columns:
+    public.customers:
+      - first_name
+      - last_name
+      - email
+      - phone
+
+certification:
+  prefer: certified
+  require_for_execute_sql: false
+  require_for_query_metrics: false
+
+joins:
+  enforce_bundle_allowlist: true
+  allow_cross_bundle: false  # cross-bundle joins require orchestrator authorization
+
+execution:
+  allow_execute_sql: true
+  allow_query_metrics: true
+  require_contract: false
+  require_bundle: true
+  sql_validation:
+    mode: parse
+    disallow_multi_statement: true
+    enforce_limit: true
+
+# Agent-specific execution limits
+agent_limits:
+  max_llm_calls_per_agent: 10
+  cost_limit_per_decision_usd: 0.50
+  max_query_execution_time_seconds: 30
+
+# Freshness expectations
+freshness:
+  flights:
+    max_delay_minutes: 5
+    description: Flight status must be near real-time during disruptions
+  bookings:
+    max_delay_minutes: 15
+    description: Booking data should reflect recent changes
+  flight_delays:
+    max_delay_hours: 1
+    description: Delay data refreshed hourly
+  customers:
+    max_delay_hours: 24
+    description: Customer profiles are relatively static

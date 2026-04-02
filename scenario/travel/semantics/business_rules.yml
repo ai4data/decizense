@@ -1,0 +1,155 @@
+rules:
+
+  # Booking Rules
+  - name: payment_before_confirmation
+    category: booking_integrity
+    severity: error
+    description: A booking cannot be confirmed without a successful payment.
+    applies_to: [bookings.confirmed_bookings, bookings.total_revenue]
+    guidance: Always verify payment status before treating a booking as confirmed.
+    rationale:
+      source: incident
+      reference: "INC-2024-0156"
+      description: "Unpaid bookings locked 230 seats for 48 hours during peak season, causing $45K in lost revenue."
+      author: booking-ops-team
+      date: 2024-06-20
+
+  - name: booking_immutable_after_departure
+    category: booking_integrity
+    severity: error
+    description: Bookings cannot be modified after the first flight in the itinerary departs.
+    applies_to: [bookings.total_bookings]
+    guidance: Check flight departure status before allowing any booking modification.
+    rationale:
+      source: regulation
+      reference: "Terms and Conditions Section 4.2"
+      description: "Legal requirement — ticket contract terms prevent post-departure modifications."
+      author: legal-team
+      date: 2024-01-15
+
+  # Operational Rules
+  - name: checkin_window
+    category: operations
+    severity: error
+    description: Check-in closes 45 minutes before scheduled departure.
+    applies_to: [flights.total_flights]
+    guidance: When assessing check-in eligibility, compare current time against departure minus 45 minutes.
+    rationale:
+      source: regulation
+      reference: "EU-261/2004 Article 3"
+      description: "Minimum time required for security processing and boarding procedures."
+      author: compliance-team
+      date: 2023-09-01
+
+  - name: seat_uniqueness
+    category: operations
+    severity: error
+    description: Each seat number must be unique per flight. No double bookings.
+    applies_to: [flights.total_flights]
+    guidance: Database constraint enforces this. If violated, escalate immediately.
+    rationale:
+      source: policy
+      reference: "OPS-SAFETY-001"
+      description: "Physical constraint — one seat, one passenger. Safety critical."
+      author: flight-ops-team
+      date: 2023-01-01
+
+  - name: overbooking_limit
+    category: revenue_management
+    severity: warning
+    description: Flight bookings cannot exceed 105% of aircraft capacity.
+    applies_to: [flights.total_capacity, bookings.total_bookings]
+    guidance: >
+      When reporting seat availability, calculate as: capacity * 1.05 - booked_tickets.
+      Flag flights above 105% for manual review.
+    rationale:
+      source: policy
+      reference: "OPS-POLICY-2025-12"
+      description: "Historical no-show rate is 4.8%. 105% limit balances revenue optimization against rebooking costs ($180 avg per involuntary denied boarding)."
+      author: revenue-management-team
+      date: 2025-06-15
+
+  # Disruption Rules
+  - name: rebooking_priority_connections
+    category: disruption_management
+    severity: error
+    description: When rebooking is needed, connecting passengers must be prioritized over point-to-point travelers.
+    applies_to: [bookings.total_bookings, flights.delayed_flights]
+    guidance: >
+      Identify passengers with multiple tickets in the same booking.
+      If any connecting flight is at risk (connection time < 60 min), prioritize rebooking.
+    rationale:
+      source: incident
+      reference: "INC-2025-0891"
+      description: "In March 2025, 23 passengers missed connections at CDG because rebooking system prioritized by ticket class instead of connection urgency. Cost: $12K in compensation + brand damage."
+      author: customer-experience-director
+      date: 2025-04-01
+
+  - name: compensation_threshold
+    category: disruption_management
+    severity: warning
+    description: Delays exceeding 3 hours trigger EU-261 compensation eligibility.
+    applies_to: [delays.total_delays, delays.avg_delay_minutes]
+    guidance: >
+      For delays > 180 minutes on EU-originating flights, calculate compensation:
+      €250 for flights < 1500km, €400 for 1500-3500km, €600 for > 3500km.
+    rationale:
+      source: regulation
+      reference: "EU-261/2004 Article 7"
+      description: "EU regulation — non-negotiable. Failure to compensate triggers regulatory fines."
+      author: compliance-team
+      date: 2023-09-01
+
+  - name: reaccommodation_window
+    category: disruption_management
+    severity: warning
+    description: Disrupted passengers must be offered alternative transport within 24 hours.
+    applies_to: [flights.cancelled_flights, flights.delayed_flights]
+    guidance: Search for alternative flights within 24-hour window. Include partner airlines if no own flights available.
+    rationale:
+      source: policy
+      reference: "CUST-FIRST-POLICY-V3"
+      description: "Company SLA — maintaining customer trust during disruptions is a strategic priority."
+      author: customer-experience-director
+      date: 2025-01-10
+
+  # Revenue Rules
+  - name: revenue_excludes_cancelled
+    category: revenue
+    severity: error
+    description: Revenue calculations must exclude cancelled bookings.
+    applies_to: [bookings.total_revenue, bookings.avg_booking_value]
+    guidance: Always filter by status != 'cancelled' when computing revenue metrics.
+    rationale:
+      source: incident
+      reference: "INC-2025-0234"
+      description: "Q1 2025 revenue report included cancelled bookings, overstating revenue by 5.1%. Board presentation had to be corrected."
+      author: finance-team
+      date: 2025-02-15
+
+  - name: refunds_separate_from_revenue
+    category: revenue
+    severity: warning
+    description: Refunds must be reported separately, not netted against revenue.
+    applies_to: [payments.total_payment_amount, payments.refunded_amount]
+    guidance: Report gross revenue and refunds as separate line items. Net revenue = gross - refunds.
+    rationale:
+      source: policy
+      reference: "FIN-REPORTING-2025"
+      description: "Audit requirement — gross and net must be distinguishable for financial reporting."
+      author: finance-team
+      date: 2025-01-01
+
+  # PII Rules
+  - name: pii_customer_data
+    category: privacy
+    severity: error
+    description: Customer personal data (name, email, phone) must never appear in query results or agent findings.
+    applies_to: [bookings.total_bookings]
+    guidance: Use customer_id for identification. Never query first_name, last_name, email, or phone columns.
+    rationale:
+      source: regulation
+      reference: "GDPR Article 5(1)(c)"
+      description: "Data minimization principle. Agent access to PII has no legitimate purpose — only aggregated analytics are needed."
+      author: dpo-team
+      date: 2023-06-01

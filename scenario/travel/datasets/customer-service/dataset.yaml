@@ -1,0 +1,17 @@
+bundle_id: customer-service
+display_name: Customer Service
+description: >
+  Customer profiles and loyalty data. Used by the customer service agent
+  for tier assessment and service eligibility. PII columns are blocked.
+owner: customer-experience-team
+certification: certified
+
+tables:
+  - schema: public
+    table: customers
+
+# Cross-bundle join: bookings.customer_id → customers.customer_id
+cross_bundle_joins:
+  - left_bundle: bookings
+    left: { schema: public, table: bookings, column: customer_id }
+    right: { schema: public, table: customers, column: customer_id }
