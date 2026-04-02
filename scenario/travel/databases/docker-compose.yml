@@ -1,33 +1,33 @@
 services:
-  travel-postgres:
-    container_name: travel_postgres
-    image: postgres:16
-    environment:
-      POSTGRES_USER: travel_admin
-      POSTGRES_PASSWORD: travel_pass
-      POSTGRES_DB: travel_db
-    ports:
-      - "5433:5432"
-    volumes:
-      - travel-pg-data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U travel_admin -d travel_db"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+    travel-postgres:
+        container_name: travel_postgres
+        image: postgres:16
+        environment:
+            POSTGRES_USER: travel_admin
+            POSTGRES_PASSWORD: travel_pass
+            POSTGRES_DB: travel_db
+        ports:
+            - '5433:5432'
+        volumes:
+            - travel-pg-data:/var/lib/postgresql/data
+            - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U travel_admin -d travel_db']
+            interval: 5s
+            timeout: 3s
+            retries: 10
 
-  pgadmin:
-    container_name: travel_pgadmin
-    image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@dazense.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-    depends_on:
-      travel-postgres:
-        condition: service_healthy
+    pgadmin:
+        container_name: travel_pgadmin
+        image: dpage/pgadmin4:latest
+        environment:
+            PGADMIN_DEFAULT_EMAIL: admin@dazense.com
+            PGADMIN_DEFAULT_PASSWORD: admin
+        ports:
+            - '5050:80'
+        depends_on:
+            travel-postgres:
+                condition: service_healthy
 
 volumes:
-  travel-pg-data:
+    travel-pg-data:

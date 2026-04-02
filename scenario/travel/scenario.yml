@@ -1,20 +1,19 @@
 name: travel
 display_name: SkyJet Travel Operations
 description: >
-  A travel booking platform where customers search for flights, book itineraries,
-  and travel through a journey lifecycle. Agents handle flight operations,
-  booking management, and customer service across disruption scenarios.
+    A travel booking platform where customers search for flights, book itineraries,
+    and travel through a journey lifecycle. Agents handle flight operations,
+    booking management, and customer service across disruption scenarios.
 domain: travel-operations
-
 database:
-  type: postgresql
-  host: localhost
-  port: 5433
-  name: travel_db
-  user: travel_admin
-  password: "{{ env('TRAVEL_DB_PASSWORD', 'travel_pass') }}"
+    type: postgresql
+    host: localhost
+    port: 5433
+    name: travel_db
+    user: travel_admin
+    password: "{{ env('TRAVEL_DB_PASSWORD', 'travel_pass') }}"
 
 catalog:
-  provider: openmetadata
-  url: "{{ env('CATALOG_URL', 'http://localhost:8585') }}"
-  token: "{{ env('CATALOG_TOKEN') }}"
+    provider: openmetadata
+    url: "{{ env('CATALOG_URL', 'http://localhost:8585') }}"
+    token: "{{ env('CATALOG_TOKEN') }}"

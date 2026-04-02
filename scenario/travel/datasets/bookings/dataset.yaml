@@ -1,38 +1,38 @@
 bundle_id: bookings
 display_name: Booking Management
 description: >
-  Bookings, tickets, and payments. Used by the booking agent for
-  reservation management, rebooking, and payment verification.
+    Bookings, tickets, and payments. Used by the booking agent for
+    reservation management, rebooking, and payment verification.
 owner: booking-ops-team
 certification: certified
 
 tables:
-  - schema: public
-    table: bookings
-  - schema: public
-    table: tickets
-  - schema: public
-    table: payments
-  - schema: public
-    table: checkins
+    - schema: public
+      table: bookings
+    - schema: public
+      table: tickets
+    - schema: public
+      table: payments
+    - schema: public
+      table: checkins
 
 joins:
-  - left: { schema: public, table: tickets, column: booking_id }
-    right: { schema: public, table: bookings, column: booking_id }
-  - left: { schema: public, table: payments, column: booking_id }
-    right: { schema: public, table: bookings, column: booking_id }
-  - left: { schema: public, table: checkins, column: ticket_id }
-    right: { schema: public, table: tickets, column: ticket_id }
+    - left: { schema: public, table: tickets, column: booking_id }
+      right: { schema: public, table: bookings, column: booking_id }
+    - left: { schema: public, table: payments, column: booking_id }
+      right: { schema: public, table: bookings, column: booking_id }
+    - left: { schema: public, table: checkins, column: ticket_id }
+      right: { schema: public, table: tickets, column: ticket_id }
 
 # Cross-bundle join: tickets.flight_id → flights.flight_id
 # This requires orchestrator-level authorization
 cross_bundle_joins:
-  - left: { schema: public, table: tickets, column: flight_id }
-    right_bundle: flights-ops
-    right: { schema: public, table: flights, column: flight_id }
+    - left: { schema: public, table: tickets, column: flight_id }
+      right_bundle: flights-ops
+      right: { schema: public, table: flights, column: flight_id }
 
 time_filters:
-  - table: bookings
-    column: booking_date
-    required: true
-    max_days: 180
+    - table: bookings
+      column: booking_date
+      required: true
+      max_days: 180

@@ -136,6 +136,7 @@ Session: "Will passenger miss connection?"
 ```
 
 Governance on the workspace:
+
 - Agents can only write findings for their own identity
 - Agents can only read findings from agents in the same session
 - PII is stripped from inter-agent findings
@@ -200,14 +201,14 @@ To switch domain: point to a different scenario folder. The harness code doesn't
 
 ## Technology Choices
 
-| Component | Technology | Why |
-| --- | --- | --- |
-| MCP server | TypeScript (Fastify) | Same stack as dazense backend, MCP SDK available |
-| Context graph | TypeScript + Python | Reuse existing graph compiler from dazense |
-| Policy engine | TypeScript | Reuse existing policy engine from dazense |
-| Decision store | PostgreSQL | Same instance as scenario data, ACID, queryable |
-| Semantic engine | Python (Ibis) | Cross-database query compilation |
-| Agent auth | JWT | Same pattern as catalog bot tokens |
+| Component       | Technology           | Why                                              |
+| --------------- | -------------------- | ------------------------------------------------ |
+| MCP server      | TypeScript (Fastify) | Same stack as dazense backend, MCP SDK available |
+| Context graph   | TypeScript + Python  | Reuse existing graph compiler from dazense       |
+| Policy engine   | TypeScript           | Reuse existing policy engine from dazense        |
+| Decision store  | PostgreSQL           | Same instance as scenario data, ACID, queryable  |
+| Semantic engine | Python (Ibis)        | Cross-database query compilation                 |
+| Agent auth      | JWT                  | Same pattern as catalog bot tokens               |
 
 ## Build Order
 

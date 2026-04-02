@@ -1,29 +1,10 @@
-project_name: example
-databases:
-- name: duckdb-jaffle-shop
-  accessors:
-  - columns
-  - preview
-  include: []
-  exclude: []
-  type: duckdb
-  path: ./jaffle_shop.duckdb
-repos:
-- name: dbt
-  url: https://github.com/dbt-labs/jaffle_shop_duckdb.git
-  branch: null
+project_name: travel-ops
+databases: []
+repos: []
 notion: null
 llm:
-    provider: openai
-    api_key: "{{ env('OPENAI_API_KEY') }}"
+  provider: openai
+  api_key: "{{ env('OPENAI_API_KEY') }}"
 slack: null
 mcp:
   json_file_path: ./agent/mcps/mcp.json
-catalog:
-  provider: openmetadata
-  url: http://localhost:8585
-  token: "{{ env('CATALOG_TOKEN') }}"
-  services: [jaffle_shop_postgres]
-agent:
-  id: "dazense://metazense.com/jaffle-shop-agent"
-  catalog_bot: "dazense-jaffle-agent"

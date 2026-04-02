@@ -1,23 +1,23 @@
 {
-  "name": "@dazense/harness",
-  "version": "0.1.0",
-  "description": "dazense Agent Harness — MCP server for governed multi-agent decision-making",
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "build": "tsc"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "pg": "^8.20.0",
-    "yaml": "^2.8.3",
-    "zod": "^3.24.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/pg": "^8.20.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
-  }
+	"name": "@dazense/harness",
+	"version": "0.1.0",
+	"description": "dazense Agent Harness — MCP server for governed multi-agent decision-making",
+	"type": "module",
+	"scripts": {
+		"dev": "tsx watch src/server.ts",
+		"start": "tsx src/server.ts",
+		"build": "tsc"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.12.0",
+		"pg": "^8.20.0",
+		"yaml": "^2.8.3",
+		"zod": "^3.24.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/pg": "^8.20.0",
+		"tsx": "^4.19.0",
+		"typescript": "^5.8.0"
+	}
 }

@@ -1,10 +1,11 @@
 {
   "mcpServers": {
-    "openmetadata": {
-      "type": "http",
-      "url": "http://localhost:8585/mcp",
-      "headers": {
-        "Authorization": "Bearer {{ env('CATALOG_TOKEN') }}"
+    "harness": {
+      "command": "npx",
+      "args": ["tsx", "src/server.ts"],
+      "cwd": "C:/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness",
+      "env": {
+        "SCENARIO_PATH": "../scenario/travel"
       }
     }
   }

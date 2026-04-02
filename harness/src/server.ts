@@ -17,22 +17,22 @@
  *   SCENARIO_PATH=../scenario/travel npx tsx src/server.ts
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { ScenarioLoader } from "./config/index.js";
-import { initDatabase, closeDatabase } from "./database/index.js";
-import { initGovernance } from "./governance/index.js";
-import { registerContextTools } from "./tools/context.js";
-import { registerControlTools, initControlTools } from "./tools/control.js";
-import { registerActionTools } from "./tools/action.js";
-import { registerPersistTools } from "./tools/persist.js";
-import { registerVerifyTools } from "./tools/verify.js";
-import { registerAdminTools } from "./tools/admin.js";
+import { ScenarioLoader } from './config/index.js';
+import { initDatabase, closeDatabase } from './database/index.js';
+import { initGovernance } from './governance/index.js';
+import { registerContextTools } from './tools/context.js';
+import { registerControlTools, initControlTools } from './tools/control.js';
+import { registerActionTools } from './tools/action.js';
+import { registerPersistTools } from './tools/persist.js';
+import { registerVerifyTools } from './tools/verify.js';
+import { registerAdminTools } from './tools/admin.js';
 
 const server = new McpServer({
-  name: "dazense-harness",
-  version: "0.1.0",
+	name: 'dazense-harness',
+	version: '0.1.0',
 });
 
 // ── Agent-facing tools (agents call these) ──
@@ -47,54 +47,54 @@ registerAdminTools(server); // find_governance_gaps, simulate_removal, graph_sta
 
 // Start the server
 async function main() {
-  // Load scenario config
-  const scenarioPath = process.env.SCENARIO_PATH || "../scenario/travel";
-  console.error(`[harness] Loading scenario from: ${scenarioPath}`);
+	// Load scenario config
+	const scenarioPath = process.env.SCENARIO_PATH || '../scenario/travel';
+	console.error(`[harness] Loading scenario from: ${scenarioPath}`);
 
-  try {
-    const loader = new ScenarioLoader(scenarioPath);
-    const scenario = loader.scenario;
-    console.error(`[harness] Scenario: ${scenario.display_name} (${scenario.name})`);
+	try {
+		const loader = new ScenarioLoader(scenarioPath);
+		const scenario = loader.scenario;
+		console.error(`[harness] Scenario: ${scenario.display_name} (${scenario.name})`);
 
-    // Initialize database connection
-    const db = scenario.database;
-    initDatabase({
-      host: db.host,
-      port: db.port,
-      database: db.name,
-      user: db.user,
-      password: db.password,
-    });
-    console.error(`[harness] Database: ${db.type}://${db.host}:${db.port}/${db.name}`);
+		// Initialize database connection
+		const db = scenario.database;
+		initDatabase({
+			host: db.host,
+			port: db.port,
+			database: db.name,
+			user: db.user,
+			password: db.password,
+		});
+		console.error(`[harness] Database: ${db.type}://${db.host}:${db.port}/${db.name}`);
 
-    // Initialize governance and control engines
-    initGovernance(scenarioPath);
-    initControlTools(scenarioPath);
-    const agents = loader.agents;
-    const agentNames = Object.keys(agents.agents);
-    console.error(`[harness] Agents: ${agentNames.join(", ")}`);
+		// Initialize governance and control engines
+		initGovernance(scenarioPath);
+		initControlTools(scenarioPath);
+		const agents = loader.agents;
+		const agentNames = Object.keys(agents.agents);
+		console.error(`[harness] Agents: ${agentNames.join(', ')}`);
 
-    const policy = loader.policy;
-    const piiCount = Object.values(policy.pii.columns).flat().length;
-    console.error(`[harness] Policy: ${piiCount} PII columns blocked, max ${policy.defaults.max_rows} rows`);
-  } catch (err) {
-    console.error(`[harness] Warning: Could not load scenario config: ${(err as Error).message}`);
-    console.error(`[harness] Running with scaffold responses only`);
-  }
+		const policy = loader.policy;
+		const piiCount = Object.values(policy.pii.columns).flat().length;
+		console.error(`[harness] Policy: ${piiCount} PII columns blocked, max ${policy.defaults.max_rows} rows`);
+	} catch (err) {
+		console.error(`[harness] Warning: Could not load scenario config: ${(err as Error).message}`);
+		console.error(`[harness] Running with scaffold responses only`);
+	}
 
-  // Start MCP transport
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("[harness] dazense Agent Harness MCP server started");
+	// Start MCP transport
+	const transport = new StdioServerTransport();
+	await server.connect(transport);
+	console.error('[harness] dazense Agent Harness MCP server started');
 
-  // Cleanup on exit
-  process.on("SIGINT", async () => {
-    await closeDatabase();
-    process.exit(0);
-  });
+	// Cleanup on exit
+	process.on('SIGINT', async () => {
+		await closeDatabase();
+		process.exit(0);
+	});
 }
 
 main().catch((err) => {
-  console.error("[harness] Fatal error:", err);
-  process.exit(1);
+	console.error('[harness] Fatal error:', err);
+	process.exit(1);
 });

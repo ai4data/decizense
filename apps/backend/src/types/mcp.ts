@@ -8,6 +8,7 @@ export interface McpServerConfig {
 	// For stdio transport
 	command?: string;
 	args?: string[];
+	cwd?: string;
 	env?: Record<string, string>;
 }
 
@@ -33,6 +34,7 @@ export const mcpJsonSchema = z.object({
 			headers: z.record(z.string(), z.string()).optional(),
 			command: z.string().optional(),
 			args: z.array(z.string()).optional(),
+			cwd: z.string().optional(),
 			env: z.record(z.string(), z.string()).optional(),
 		}),
 	),

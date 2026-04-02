@@ -1,75 +1,74 @@
 concepts:
+    - name: TravelJourney
+      description: The end-to-end process of a customer traveling from booking to arrival
+      children:
+          - name: Booking
+            description: A reservation for one or more flights
+          - name: CheckIn
+            description: Pre-departure passenger registration
+          - name: Boarding
+            description: Passenger enters the aircraft
+          - name: Flight
+            description: Aircraft movement from origin to destination
 
-  - name: TravelJourney
-    description: The end-to-end process of a customer traveling from booking to arrival
-    children:
-      - name: Booking
-        description: A reservation for one or more flights
-      - name: CheckIn
-        description: Pre-departure passenger registration
-      - name: Boarding
-        description: Passenger enters the aircraft
-      - name: Flight
-        description: Aircraft movement from origin to destination
+    - name: Person
+      description: A human entity in the system
+      children:
+          - name: Customer
+            description: A person who books flights
+            children:
+                - name: FrequentFlyer
+                  description: Customer with loyalty tier silver, gold, or platinum
+                - name: ConnectingPassenger
+                  description: Customer with tickets on 2+ flights in the same booking
+                - name: NewCustomer
+                  description: Customer with exactly 1 booking
+          - name: CrewMember
+            description: Airline staff operating the flight (not in current data)
 
-  - name: Person
-    description: A human entity in the system
-    children:
-      - name: Customer
-        description: A person who books flights
-        children:
-          - name: FrequentFlyer
-            description: Customer with loyalty tier silver, gold, or platinum
-          - name: ConnectingPassenger
-            description: Customer with tickets on 2+ flights in the same booking
-          - name: NewCustomer
-            description: Customer with exactly 1 booking
-      - name: CrewMember
-        description: Airline staff operating the flight (not in current data)
+    - name: FlightDisruption
+      description: Any event that deviates from the scheduled flight plan
+      children:
+          - name: Delay
+            description: Flight departs or arrives later than scheduled
+            children:
+                - name: WeatherDelay
+                  description: Delay caused by weather conditions
+                - name: TechnicalDelay
+                  description: Delay caused by aircraft mechanical issues
+                - name: CrewDelay
+                  description: Delay caused by crew availability
+                - name: CongestionDelay
+                  description: Delay caused by airport or airspace congestion
+                - name: CascadingDelay
+                  description: Delay caused by late arrival of inbound aircraft
+          - name: Cancellation
+            description: Flight will not operate as scheduled
+          - name: Diversion
+            description: Flight lands at airport other than destination (not in current data)
 
-  - name: FlightDisruption
-    description: Any event that deviates from the scheduled flight plan
-    children:
-      - name: Delay
-        description: Flight departs or arrives later than scheduled
-        children:
-          - name: WeatherDelay
-            description: Delay caused by weather conditions
-          - name: TechnicalDelay
-            description: Delay caused by aircraft mechanical issues
-          - name: CrewDelay
-            description: Delay caused by crew availability
-          - name: CongestionDelay
-            description: Delay caused by airport or airspace congestion
-          - name: CascadingDelay
-            description: Delay caused by late arrival of inbound aircraft
-      - name: Cancellation
-        description: Flight will not operate as scheduled
-      - name: Diversion
-        description: Flight lands at airport other than destination (not in current data)
+    - name: Payment
+      description: A financial transaction for a booking
+      children:
+          - name: SuccessfulPayment
+            description: Payment completed and funds captured
+          - name: FailedPayment
+            description: Payment declined or errored
+          - name: Refund
+            description: Funds returned to customer
 
-  - name: Payment
-    description: A financial transaction for a booking
-    children:
-      - name: SuccessfulPayment
-        description: Payment completed and funds captured
-      - name: FailedPayment
-        description: Payment declined or errored
-      - name: Refund
-        description: Funds returned to customer
+    - name: Revenue
+      description: Monetary value from flight operations
+      children:
+          - name: BookingRevenue
+            description: Revenue from confirmed, non-cancelled bookings
+          - name: AncillaryRevenue
+            description: Revenue from add-ons (seats, bags, upgrades) — future
 
-  - name: Revenue
-    description: Monetary value from flight operations
-    children:
-      - name: BookingRevenue
-        description: Revenue from confirmed, non-cancelled bookings
-      - name: AncillaryRevenue
-        description: Revenue from add-ons (seats, bags, upgrades) — future
-
-  - name: Regulation
-    description: External rules that constrain operations
-    children:
-      - name: EU261
-        description: EU regulation on air passenger rights (compensation, rebooking)
-      - name: GDPR
-        description: EU regulation on personal data protection
+    - name: Regulation
+      description: External rules that constrain operations
+      children:
+          - name: EU261
+            description: EU regulation on air passenger rights (compensation, rebooking)
+          - name: GDPR
+            description: EU regulation on personal data protection

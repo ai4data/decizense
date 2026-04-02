@@ -1,130 +1,129 @@
 intents:
+    # Disruption Analysis
+    - question: 'Will the passenger miss their connection?'
+      domain: disruption
+      description: >
+          Assess whether a delayed flight puts connecting passengers at risk.
+          Requires: current delay, connection time, minimum connection window.
+      answered_by:
+          measures: [delays.avg_delay_minutes, flights.delayed_flights]
+          dimensions: [flights.origin, flights.destination, flights.status]
+          tables: [flights, tickets, flight_delays]
+      agents: [flight_ops, booking]
+      rules: [rebooking_priority_connections, checkin_window]
 
-  # Disruption Analysis
-  - question: "Will the passenger miss their connection?"
-    domain: disruption
-    description: >
-      Assess whether a delayed flight puts connecting passengers at risk.
-      Requires: current delay, connection time, minimum connection window.
-    answered_by:
-      measures: [delays.avg_delay_minutes, flights.delayed_flights]
-      dimensions: [flights.origin, flights.destination, flights.status]
-      tables: [flights, tickets, flight_delays]
-    agents: [flight_ops, booking]
-    rules: [rebooking_priority_connections, checkin_window]
+    - question: 'Which passengers will miss connections if a flight is delayed?'
+      domain: disruption
+      description: >
+          Identify all passengers on a specific flight who have connecting
+          tickets with insufficient buffer time after the delay.
+      answered_by:
+          tables: [flights, tickets, bookings, flight_delays]
+      agents: [flight_ops, booking]
+      rules: [rebooking_priority_connections]
 
-  - question: "Which passengers will miss connections if a flight is delayed?"
-    domain: disruption
-    description: >
-      Identify all passengers on a specific flight who have connecting
-      tickets with insufficient buffer time after the delay.
-    answered_by:
-      tables: [flights, tickets, bookings, flight_delays]
-    agents: [flight_ops, booking]
-    rules: [rebooking_priority_connections]
+    - question: 'Should we proactively rebook passengers?'
+      domain: disruption
+      description: >
+          Decision: is the delay severe enough to trigger rebooking?
+          Requires: delay duration, connection risk, rebooking cost vs compensation cost, precedent.
+      answered_by:
+          measures: [delays.max_delay_minutes, bookings.total_bookings]
+          tables: [flights, tickets, bookings, flight_delays]
+      agents: [flight_ops, booking, customer_service]
+      rules: [rebooking_priority_connections, compensation_threshold, reaccommodation_window]
 
-  - question: "Should we proactively rebook passengers?"
-    domain: disruption
-    description: >
-      Decision: is the delay severe enough to trigger rebooking?
-      Requires: delay duration, connection risk, rebooking cost vs compensation cost, precedent.
-    answered_by:
-      measures: [delays.max_delay_minutes, bookings.total_bookings]
-      tables: [flights, tickets, bookings, flight_delays]
-    agents: [flight_ops, booking, customer_service]
-    rules: [rebooking_priority_connections, compensation_threshold, reaccommodation_window]
+    - question: 'Which flights are likely to depart late today?'
+      domain: disruption
+      description: >
+          Predict delays based on current status, historical patterns, and cascading effects.
+      answered_by:
+          measures: [flights.delayed_flights, delays.avg_delay_minutes, delays.total_delays]
+          dimensions: [delays.delay_reason, flights.origin, flights.destination]
+      agents: [flight_ops]
 
-  - question: "Which flights are likely to depart late today?"
-    domain: disruption
-    description: >
-      Predict delays based on current status, historical patterns, and cascading effects.
-    answered_by:
-      measures: [flights.delayed_flights, delays.avg_delay_minutes, delays.total_delays]
-      dimensions: [delays.delay_reason, flights.origin, flights.destination]
-    agents: [flight_ops]
+    # Revenue & Financial
+    - question: 'What is the total revenue this month?'
+      domain: finance
+      description: Revenue from confirmed, non-cancelled bookings.
+      answered_by:
+          measures: [bookings.total_revenue]
+          dimensions: [bookings.booking_date]
+      agents: [booking]
+      rules: [revenue_excludes_cancelled, refunds_separate_from_revenue]
 
-  # Revenue & Financial
-  - question: "What is the total revenue this month?"
-    domain: finance
-    description: Revenue from confirmed, non-cancelled bookings.
-    answered_by:
-      measures: [bookings.total_revenue]
-      dimensions: [bookings.booking_date]
-    agents: [booking]
-    rules: [revenue_excludes_cancelled, refunds_separate_from_revenue]
+    - question: 'What is the cancellation rate?'
+      domain: finance
+      description: Percentage of bookings that were cancelled.
+      answered_by:
+          measures: [bookings.cancelled_bookings, bookings.total_bookings]
+      agents: [booking]
 
-  - question: "What is the cancellation rate?"
-    domain: finance
-    description: Percentage of bookings that were cancelled.
-    answered_by:
-      measures: [bookings.cancelled_bookings, bookings.total_bookings]
-    agents: [booking]
+    - question: 'What is the payment failure rate?'
+      domain: finance
+      description: Percentage of payment attempts that failed.
+      answered_by:
+          measures: [payments.failed_payments, payments.total_payments]
+          dimensions: [payments.payment_method]
+      agents: [booking]
 
-  - question: "What is the payment failure rate?"
-    domain: finance
-    description: Percentage of payment attempts that failed.
-    answered_by:
-      measures: [payments.failed_payments, payments.total_payments]
-      dimensions: [payments.payment_method]
-    agents: [booking]
+    # Operational
+    - question: 'What is the average delay by cause?'
+      domain: operations
+      description: Breakdown of delay duration by root cause category.
+      answered_by:
+          measures: [delays.avg_delay_minutes, delays.total_delays]
+          dimensions: [delays.delay_reason]
+      agents: [flight_ops]
 
-  # Operational
-  - question: "What is the average delay by cause?"
-    domain: operations
-    description: Breakdown of delay duration by root cause category.
-    answered_by:
-      measures: [delays.avg_delay_minutes, delays.total_delays]
-      dimensions: [delays.delay_reason]
-    agents: [flight_ops]
+    - question: 'Which routes have the most delays?'
+      domain: operations
+      description: Routes ranked by delay frequency or average delay duration.
+      answered_by:
+          measures: [delays.total_delays, delays.avg_delay_minutes]
+          dimensions: [flights.origin, flights.destination]
+      agents: [flight_ops]
 
-  - question: "Which routes have the most delays?"
-    domain: operations
-    description: Routes ranked by delay frequency or average delay duration.
-    answered_by:
-      measures: [delays.total_delays, delays.avg_delay_minutes]
-      dimensions: [flights.origin, flights.destination]
-    agents: [flight_ops]
+    - question: 'What is the seat utilization across flights?'
+      domain: operations
+      description: How full are flights on average?
+      answered_by:
+          measures: [flights.total_capacity, bookings.total_bookings]
+          dimensions: [flights.origin, flights.destination, flights.aircraft_type]
+      agents: [flight_ops, booking]
+      rules: [overbooking_limit]
 
-  - question: "What is the seat utilization across flights?"
-    domain: operations
-    description: How full are flights on average?
-    answered_by:
-      measures: [flights.total_capacity, bookings.total_bookings]
-      dimensions: [flights.origin, flights.destination, flights.aircraft_type]
-    agents: [flight_ops, booking]
-    rules: [overbooking_limit]
+    # Customer
+    - question: 'What are the customer loyalty tier distributions?'
+      domain: customer
+      description: Breakdown of customers by loyalty tier.
+      answered_by:
+          tables: [customers]
+          dimensions: []
+      agents: [customer_service]
+      rules: [pii_customer_data]
 
-  # Customer
-  - question: "What are the customer loyalty tier distributions?"
-    domain: customer
-    description: Breakdown of customers by loyalty tier.
-    answered_by:
-      tables: [customers]
-      dimensions: []
-    agents: [customer_service]
-    rules: [pii_customer_data]
+    - question: 'Is this passenger eligible for lounge access?'
+      domain: customer
+      description: Check loyalty tier and delay duration for lounge eligibility.
+      answered_by:
+          tables: [customers]
+      agents: [customer_service]
+      rules: [pii_customer_data]
 
-  - question: "Is this passenger eligible for lounge access?"
-    domain: customer
-    description: Check loyalty tier and delay duration for lounge eligibility.
-    answered_by:
-      tables: [customers]
-    agents: [customer_service]
-    rules: [pii_customer_data]
+    # Process
+    - question: 'Where do most booking failures occur?'
+      domain: process
+      description: >
+          Analyze the event log to find which step in the booking process
+          has the highest failure rate (payment, check-in, boarding).
+      answered_by:
+          tables: [events]
+      agents: [booking]
 
-  # Process
-  - question: "Where do most booking failures occur?"
-    domain: process
-    description: >
-      Analyze the event log to find which step in the booking process
-      has the highest failure rate (payment, check-in, boarding).
-    answered_by:
-      tables: [events]
-    agents: [booking]
-
-  - question: "What is the average time between booking and check-in?"
-    domain: process
-    description: Process mining metric — lead time from BookingCreated to CheckInCompleted.
-    answered_by:
-      tables: [events]
-    agents: [booking]
+    - question: 'What is the average time between booking and check-in?'
+      domain: process
+      description: Process mining metric — lead time from BookingCreated to CheckInCompleted.
+      answered_by:
+          tables: [events]
+      agents: [booking]

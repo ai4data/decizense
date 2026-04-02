@@ -1,72 +1,71 @@
 agents:
+    orchestrator:
+        display_name: Travel Operations Orchestrator
+        description: >
+            Decomposes complex travel questions into sub-tasks, delegates to
+            domain agents, combines findings into decisions with confidence scores.
+        role: orchestrator
+        can_query: false # orchestrator reads context and findings, never queries DB directly
+        can_delegate_to: [flight_ops, booking, customer_service]
+        identity:
+            catalog_bot: orchestrator-agent
+            token_env: ORCHESTRATOR_TOKEN
 
-  orchestrator:
-    display_name: Travel Operations Orchestrator
-    description: >
-      Decomposes complex travel questions into sub-tasks, delegates to
-      domain agents, combines findings into decisions with confidence scores.
-    role: orchestrator
-    can_query: false  # orchestrator reads context and findings, never queries DB directly
-    can_delegate_to: [flight_ops, booking, customer_service]
-    identity:
-      catalog_bot: orchestrator-agent
-      token_env: ORCHESTRATOR_TOKEN
+    flight_ops:
+        display_name: Flight Operations Agent
+        description: >
+            Handles flight status, delays, connections, gate changes, and
+            disruption impact analysis. Knows aircraft, airports, and schedules.
+        role: domain
+        bundle: flights-ops
+        can_query: true
+        identity:
+            catalog_bot: ops-agent
+            token_env: OPS_TOKEN
+        system_prompt: >
+            You are a flight operations specialist. You have access to flight
+            schedules, delay data, and airport information. When analyzing
+            disruptions, always check connection times and cascading delay effects.
+            Report findings factually with confidence based on data freshness.
 
-  flight_ops:
-    display_name: Flight Operations Agent
-    description: >
-      Handles flight status, delays, connections, gate changes, and
-      disruption impact analysis. Knows aircraft, airports, and schedules.
-    role: domain
-    bundle: flights-ops
-    can_query: true
-    identity:
-      catalog_bot: ops-agent
-      token_env: OPS_TOKEN
-    system_prompt: >
-      You are a flight operations specialist. You have access to flight
-      schedules, delay data, and airport information. When analyzing
-      disruptions, always check connection times and cascading delay effects.
-      Report findings factually with confidence based on data freshness.
+    booking:
+        display_name: Booking Management Agent
+        description: >
+            Handles booking status, ticket validity, payment verification,
+            rebooking eligibility, and compensation calculations.
+        role: domain
+        bundle: bookings
+        can_query: true
+        identity:
+            catalog_bot: booking-agent
+            token_env: BOOKING_TOKEN
+        system_prompt: >
+            You are a booking management specialist. You have access to bookings,
+            tickets, and payments. When assessing rebooking, check booking status,
+            payment status, and ticket validity. Never expose customer PII in
+            your findings — use customer_id only.
 
-  booking:
-    display_name: Booking Management Agent
-    description: >
-      Handles booking status, ticket validity, payment verification,
-      rebooking eligibility, and compensation calculations.
-    role: domain
-    bundle: bookings
-    can_query: true
-    identity:
-      catalog_bot: booking-agent
-      token_env: BOOKING_TOKEN
-    system_prompt: >
-      You are a booking management specialist. You have access to bookings,
-      tickets, and payments. When assessing rebooking, check booking status,
-      payment status, and ticket validity. Never expose customer PII in
-      your findings — use customer_id only.
-
-  customer_service:
-    display_name: Customer Service Agent
-    description: >
-      Handles customer profiles, loyalty tiers, communication preferences,
-      and service eligibility (lounge access, priority boarding, compensation).
-    role: domain
-    bundle: customer-service
-    can_query: true
-    identity:
-      catalog_bot: customer-agent
-      token_env: CUSTOMER_TOKEN
-    system_prompt: >
-      You are a customer service specialist. You have access to customer
-      profiles and loyalty data. PII columns (first_name, last_name, email,
-      phone) are blocked by policy — never attempt to query them. Report
-      customer tier and eligibility, never personal details.
+    customer_service:
+        display_name: Customer Service Agent
+        description: >
+            Handles customer profiles, loyalty tiers, communication preferences,
+            and service eligibility (lounge access, priority boarding, compensation).
+        role: domain
+        bundle: customer-service
+        can_query: true
+        identity:
+            catalog_bot: customer-agent
+            token_env: CUSTOMER_TOKEN
+        system_prompt: >
+            You are a customer service specialist. You have access to customer
+            profiles and loyalty data. PII columns (first_name, last_name, email,
+            phone) are blocked by policy — never attempt to query them. Report
+            customer tier and eligibility, never personal details.
 
 # Inter-agent rules
 inter_agent:
-  data_sharing: aggregated_only  # agents share findings, not raw data
-  pii_in_findings: stripped       # PII never appears in inter-agent messages
-  max_agents_per_session: 4
-  max_llm_calls_per_agent: 10
-  cost_limit_per_decision: 0.50   # USD
+    data_sharing: aggregated_only # agents share findings, not raw data
+    pii_in_findings: stripped # PII never appears in inter-agent messages
+    max_agents_per_session: 4
+    max_llm_calls_per_agent: 10
+    cost_limit_per_decision: 0.50 # USD

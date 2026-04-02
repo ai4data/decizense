@@ -146,7 +146,7 @@ export class McpService {
 				kind: 'stdio',
 				command: config.command || '',
 				args: config.args || [],
-				cwd: process.cwd(),
+				cwd: config.cwd || process.cwd(),
 			},
 			env: config.env,
 		};
