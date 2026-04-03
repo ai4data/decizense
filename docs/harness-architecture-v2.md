@@ -136,7 +136,9 @@ The catalog platform is the source of truth for meaning and governance metadata.
 - **SPARQL endpoint** — complex graph queries
 - **REST API** — simple lookups
 
-What the catalog provides:
+**Design principle: maximize what comes from OMD, minimize what stays in YAML.**
+
+What comes from the catalog (OMD):
 
 | Capability      | OMD feature                                 | RDF standard                             |
 | --------------- | ------------------------------------------- | ---------------------------------------- |
@@ -146,12 +148,17 @@ What the catalog provides:
 | Classifications | PII, Sensitive, Tier tags                   | `om:classification` properties           |
 | Ownership       | Teams, domains, certification               | `om:owner`, `om:domain`                  |
 | Validation      | Schema constraints                          | SHACL shapes (`openmetadata-shapes.ttl`) |
+| Bundles         | Domains + Data Products → trust boundaries  | Domain containment, Data Product ports   |
+| Freshness SLAs  | Data quality tests + profiler freshness     | Quality test thresholds, last_modified   |
 
-The harness extends this with runtime context:
+What stays in scenario YAML (OMD cannot express these):
 
-- Business rules with rationale (from scenario YAML, seeded into OMD)
-- Freshness expectations and SLAs
-- Intent mappings (business questions → measures)
+| Capability        | Why YAML                                                                     |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Business rules    | Enforcement logic with severity/guidance/rationale — OMD has no rules engine |
+| Intent mappings   | "This question maps to these measures" — harness-specific concept            |
+| Agent definitions | Agent identity, role, system prompt — runtime config                         |
+| Inter-agent rules | Data sharing rules, cost limits — harness-specific                           |
 
 ### Layer 3: Operational/Event
 
