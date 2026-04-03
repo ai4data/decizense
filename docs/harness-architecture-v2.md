@@ -189,30 +189,41 @@ Process intelligence outputs become **signals** that feed decision proposals:
 
 ### Layer 4: Decision/Provenance
 
-**Source**: PostgreSQL decisions table (harness-managed)
+**Source**: PostgreSQL (decision_proposals, decision_approvals, decision_actions, decision_outcomes, decision_findings, agent_memory)
 
-Every significant agent action follows a lifecycle:
+Every significant agent action follows a lifecycle with evidence links:
 
 ```
-DecisionProposal
+propose_decision
     agent_id: "flight_ops"
-    action: "connection safe, no rebooking needed"
-    evidence: [event:FlightDelayed, signal:connection_buffer_2h45m, rule:checkin_window]
+    proposed_action: "connection safe, no rebooking needed"
+    evidence_event_ids: [766218]           ← links to Layer 3 events
+    evidence_signal_types: ["delay_patterns"] ← links to process signals
+    evidence_rules: ["checkin_window"]     ← links to Layer 2 rules
+    risk_class: "low"
     confidence: HIGH
         ↓
-DecisionApproval
+approve_decision
     approved_by: "auto" (low risk) or "human:operator_jane" (high risk)
-    timestamp: 2026-03-20T10:16:00Z
+    approved: true
         ↓
-DecisionAction
+execute_decision_action
     action_type: "notify_customer"
     parameters: { customer_id: "C101", message: "connection safe" }
+    status: "completed"
         ↓
-DecisionOutcome
-    result: "notification sent"
-    evidence_links: [event:E1234, policy_check:bundle_ok, rule:checkin_window]
-    → stored as searchable precedent
+record_outcome
+    decision_summary: "Connection safe. Customer notified."
+    evidence_event_ids: [766218]           ← traceable back to triggering event
+    evidence_rules: ["checkin_window"]     ← traceable to governance rules
+    evidence_proposal_ids: [1]             ← traceable to the proposal
+    → stored as searchable precedent (search_precedent tool)
 ```
+
+Supporting tools:
+
+- `write_finding` / `read_findings`: shared workspace for multi-agent collaboration
+- `save_memory` / `recall_memory`: cross-session agent learnings
 
 ### Layer 5: Action/Permission
 
@@ -238,17 +249,17 @@ Progressive autonomy:
 - After 200 decisions with < 2% error: auto-approve medium risk
 - High/critical: always human
 
-## MCP Tools by Layer
+## MCP Tools by Layer (28 tools total)
 
-| Layer        | Tools                                                                                          | Status                                    |
-| ------------ | ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| 1+2 Context  | get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale | Scaffold → wire to OMD                    |
-| 2 Governance | initialize_agent, get_business_rules + internal pipeline                                       | **Real logic**                            |
-| 3 Event      | ingest_event, get_case_timeline, get_process_signals                                           | Not built                                 |
-| 4 Decision   | write_finding, read_findings, log_decision, save_memory, recall_memory                         | Scaffold → wire to PostgreSQL             |
-| 5 Action     | query_data, query_metrics, execute_action                                                      | **Real logic** (query), scaffold (action) |
-| Admin        | find_governance_gaps, simulate_removal, graph_stats, audit_decisions                           | Scaffold                                  |
-| Verify       | verify_result, check_freshness, check_consistency, get_confidence                              | Scaffold                                  |
+| Layer        | Tools                                                                                                                                 | Status                                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 1+2 Context  | get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale                                        | **Real** — reads from OMD catalog (glossary, lineage, entities). get_rationale from YAML.                     |
+| 2 Governance | initialize_agent, get_business_rules + internal governance pipeline (10-point check)                                                  | **Real** — PII from OMD, bundles + rules from YAML.                                                           |
+| 3 Event      | ingest_event, get_case_timeline, get_process_signals                                                                                  | **Real** — PostgreSQL events table (383K records). 4 signal types.                                            |
+| 4 Decision   | propose_decision, approve_decision, execute_decision_action, record_outcome, write_finding, read_findings, save_memory, recall_memory | **Real** — full lifecycle with evidence links to events, signals, rules. PostgreSQL.                          |
+| 5 Action     | query_data, query_metrics, execute_action, get_permissions                                                                            | **Real** — risk classification, permission checks, approval gates, progressive autonomy. Layer 4 integration. |
+| Admin        | find_governance_gaps, simulate_removal, graph_stats, audit_decisions                                                                  | Scaffold                                                                                                      |
+| Verify       | verify_result, check_freshness, check_consistency, get_confidence                                                                     | Scaffold                                                                                                      |
 
 ## Proving Workflow: Missed Connection Rebooking
 
