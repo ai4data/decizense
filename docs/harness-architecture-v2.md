@@ -34,6 +34,11 @@ graph TB
             CG[("Shared Memory Substrate")]
             CG_SEM["Semantic Layer<br/>ontology, glossary, intents<br/>concept hierarchies IS_A"]
             CG_GOV["Governance Layer<br/>PII blocking, bundle scope<br/>business rules + rationale"]
+            CG_RULES["Scenario Rules<br/>business rules + rationale<br/>freshness SLAs, intents<br/>(from scenario YAML)"]
+            OMD_GLOSS -->|"glossary, ontology<br/>typed relationships"| CG_SEM
+            OMD_GOV -->|"PII tags, ownership<br/>domains, tiers"| CG_GOV
+            OMD_LIN -->|"lineage<br/>PROV-O"| CG
+            CG_RULES -->|"rules + rationale"| CG_GOV
             CG --- CG_SEM
             CG --- CG_GOV
         end
@@ -88,7 +93,7 @@ graph TB
         EXT_NOTIF["Notification Service"]
     end
 
-    OMD_MCP -->|"MCP + SPARQL"| CG
+    OMD_MCP -->|"MCP + SPARQL<br/>runtime queries"| CG
 
     CG --> ORCH
     CG --> TOOL
