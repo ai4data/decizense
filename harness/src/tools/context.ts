@@ -1,51 +1,105 @@
 /**
  * CONTEXT INJECTION tools — "Right information at the right time"
  *
- * These tools provide agents with the context they need to make decisions.
- * The context graph is the primary source: it contains entities, rules,
- * rationale, glossary terms, lineage, and freshness expectations.
+ * These tools read from the catalog (OpenMetadata) first, falling back
+ * to local YAML if the catalog is unavailable.
  *
- * Instead of dumping everything into the prompt, get_context() traverses
- * the graph and returns only what's relevant to the agent's question.
+ * Design principle: maximize what comes from OMD, minimize YAML.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { getCatalogClient } from '../catalog/index.js';
 
 export function registerContextTools(server: McpServer) {
 	/**
 	 * get_context — The primary context injection tool.
 	 *
-	 * Given a question, traverses the context graph and returns a focused
-	 * context window: relevant entities, applicable rules (with rationale),
-	 * freshness status, and similar past decisions.
-	 *
-	 * This is what the orchestrator calls first to understand what data,
-	 * rules, and agents are needed for a question.
+	 * Queries the catalog for entities, glossary terms, tags, lineage,
+	 * and business rules relevant to the question.
 	 */
 	server.tool(
 		'get_context',
-		'Get assembled context for a question — entities, rules, freshness, precedent',
+		'Get assembled context for a question — entities, rules, freshness, precedent from catalog',
 		{
 			question: z.string().describe('The business question to get context for'),
 			agent_id: z.string().optional().describe("The requesting agent's identifier"),
 		},
 		async ({ question, agent_id }) => {
-			// TODO: Wire to context graph — traverse intents, match entities, gather rules
+			const catalog = getCatalogClient();
+
+			if (!catalog) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: 'Catalog not available', _scaffold: true }),
+						},
+					],
+				};
+			}
+
+			// Get tables and glossary from catalog
+			const [tables, glossaryTerms] = await Promise.all([catalog.listTables(), catalog.listGlossaryTerms()]);
+
+			// Match glossary terms by checking if question contains term name or synonyms
+			const questionLower = question.toLowerCase();
+			const matchedTerms = glossaryTerms.filter(
+				(t) =>
+					questionLower.includes(t.name.toLowerCase()) ||
+					t.synonyms.some((s: string) => questionLower.includes(s.toLowerCase())),
+			);
+
+			// Find tables linked to matched terms
+			const relevantTableNames = new Set<string>();
+			for (const term of matchedTerms) {
+				for (const table of tables) {
+					if (table.glossaryTerms.some((gt) => gt.includes(term.name))) {
+						relevantTableNames.add(table.name);
+					}
+				}
+			}
+
+			// If no glossary match, find tables by keyword
+			if (relevantTableNames.size === 0) {
+				for (const table of tables) {
+					if (
+						questionLower.includes(table.name.toLowerCase()) ||
+						table.description
+							.toLowerCase()
+							.includes(questionLower.split(' ').filter((w) => w.length > 3)[0] ?? '')
+					) {
+						relevantTableNames.add(table.name);
+					}
+				}
+			}
+
+			const relevantTables = tables.filter((t) => relevantTableNames.has(t.name));
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
 						text: JSON.stringify(
 							{
-								_scaffold: true,
 								question,
 								agent_id: agent_id ?? 'unknown',
-								entities: ['placeholder: matched entities from graph'],
-								rules: ['placeholder: applicable business rules with rationale'],
-								freshness: { status: 'placeholder: data freshness per table' },
-								precedent: ['placeholder: similar past decisions'],
-								suggested_agents: ['placeholder: which domain agents to involve'],
+								source: 'catalog',
+								matched_glossary_terms: matchedTerms.map((t) => ({
+									name: t.name,
+									description: t.description,
+									synonyms: t.synonyms,
+									related: t.relatedTerms,
+								})),
+								relevant_tables: relevantTables.map((t) => ({
+									name: t.name,
+									description: t.description,
+									tier: t.tier,
+									pii_columns: t.piiColumns,
+									owners: t.owners,
+									columns: t.columns.map((c) => c.name),
+								})),
+								all_pii_columns: tables.flatMap((t) => t.piiColumns.map((c) => `${t.name}.${c}`)),
 							},
 							null,
 							2,
@@ -57,34 +111,52 @@ export function registerContextTools(server: McpServer) {
 	);
 
 	/**
-	 * get_entity_details — Lookup a specific entity in the context graph.
-	 *
-	 * Returns the full node with properties, inbound/outbound edges,
-	 * and catalog metadata (descriptions, tags, owners from OMD).
+	 * get_entity_details — Lookup a specific table from the catalog.
 	 */
 	server.tool(
 		'get_entity_details',
-		'Get full details of a specific entity from the context graph',
+		'Get full details of a table from the catalog — columns, tags, owners, description',
 		{
-			entity_id: z
-				.string()
-				.describe("Entity identifier (e.g. 'table:public.flights', 'measure:flights.delayed_flights')"),
+			entity_id: z.string().describe("Table name (e.g. 'flights', 'bookings')"),
 		},
 		async ({ entity_id }) => {
-			// TODO: Wire to context graph — lookup node, gather edges and properties
+			const catalog = getCatalogClient();
+			if (!catalog) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Catalog not available' }) }],
+				};
+			}
+
+			const tables = await catalog.listTables();
+			const table = tables.find((t) => t.name === entity_id || t.fqn.includes(entity_id));
+
+			if (!table) {
+				return {
+					content: [
+						{ type: 'text' as const, text: JSON.stringify({ error: `Table ${entity_id} not found` }) },
+					],
+				};
+			}
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
 						text: JSON.stringify(
 							{
-								_scaffold: true,
-								entity_id,
-								type: 'placeholder',
-								properties: {},
-								inbound_edges: [],
-								outbound_edges: [],
-								catalog_metadata: { description: '', tags: [], owners: [] },
+								name: table.name,
+								fqn: table.fqn,
+								description: table.description,
+								tier: table.tier,
+								owners: table.owners,
+								tags: table.tags,
+								pii_columns: table.piiColumns,
+								columns: table.columns.map((c) => ({
+									name: c.name,
+									type: c.dataType,
+									description: c.description,
+									pii: c.isPii,
+								})),
 							},
 							null,
 							2,
@@ -96,31 +168,39 @@ export function registerContextTools(server: McpServer) {
 	);
 
 	/**
-	 * get_lineage — Trace upstream dependencies.
-	 *
-	 * Shows what feeds into an entity: column → table → staging → raw source.
-	 * Combines governance lineage (measure → column) with pipeline lineage
-	 * (table → upstream table) from the catalog.
+	 * get_lineage — Trace upstream dependencies from the catalog.
 	 */
 	server.tool(
 		'get_lineage',
-		'Trace upstream dependencies of an entity',
+		'Trace upstream dependencies of a table from the catalog lineage',
 		{
-			entity_id: z.string().describe('Entity to trace upstream from'),
-			max_depth: z.number().optional().default(5).describe('Maximum traversal depth'),
+			entity_id: z.string().describe('Table name to trace upstream from'),
+			max_depth: z.number().optional().default(3).describe('Maximum traversal depth'),
 		},
 		async ({ entity_id, max_depth }) => {
-			// TODO: Wire to context graph — lineageOf() with both governance and pipeline edges
+			const catalog = getCatalogClient();
+			if (!catalog) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Catalog not available' }) }],
+				};
+			}
+
+			// Build full FQN if not provided
+			const fqn = entity_id.includes('.') ? entity_id : `travel_postgres.travel_db.public.${entity_id}`;
+
+			const edges = await catalog.getLineage(fqn, max_depth);
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
 						text: JSON.stringify(
 							{
-								_scaffold: true,
-								entity_id,
-								max_depth,
-								upstream: ['placeholder: ordered list of upstream dependencies'],
+								entity: entity_id,
+								upstream: edges.map((e) => ({
+									from: e.from.split('.').pop(),
+									to: e.to.split('.').pop(),
+								})),
 							},
 							null,
 							2,
@@ -132,37 +212,45 @@ export function registerContextTools(server: McpServer) {
 	);
 
 	/**
-	 * search_glossary — Lookup business terms and their synonyms.
-	 *
-	 * Resolves business language to technical entities. "Revenue" → finds
-	 * the glossary term with synonyms ["Sales", "Net Sales"] and linked
-	 * assets [bookings.total_revenue].
+	 * search_glossary — Search catalog glossary terms.
 	 */
 	server.tool(
 		'search_glossary',
-		'Search for business terms, synonyms, and their linked data assets',
+		'Search for business terms, synonyms, and descriptions from the catalog glossary',
 		{
 			query: z.string().describe('Business term or concept to search for'),
 		},
 		async ({ query }) => {
-			// TODO: Wire to context graph — search GlossaryTerm nodes by name and synonyms
+			const catalog = getCatalogClient();
+			if (!catalog) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Catalog not available' }) }],
+				};
+			}
+
+			const terms = await catalog.listGlossaryTerms();
+			const queryLower = query.toLowerCase();
+
+			const matches = terms.filter(
+				(t) =>
+					t.name.toLowerCase().includes(queryLower) ||
+					t.description.toLowerCase().includes(queryLower) ||
+					t.synonyms.some((s: string) => s.toLowerCase().includes(queryLower)),
+			);
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
 						text: JSON.stringify(
 							{
-								_scaffold: true,
 								query,
-								matches: [
-									{
-										term: 'placeholder',
-										synonyms: [],
-										description: '',
-										related_terms: [],
-										linked_assets: [],
-									},
-								],
+								matches: matches.map((t) => ({
+									name: t.name,
+									description: t.description,
+									synonyms: t.synonyms,
+									related_terms: t.relatedTerms,
+								})),
 							},
 							null,
 							2,
@@ -175,10 +263,7 @@ export function registerContextTools(server: McpServer) {
 
 	/**
 	 * search_precedent — Find similar past decisions.
-	 *
-	 * Searches the decision store for past decisions related to the current
-	 * question. Enables agents to learn from institutional memory instead
-	 * of reasoning from scratch every time.
+	 * Still scaffold — needs decision store.
 	 */
 	server.tool(
 		'search_precedent',
@@ -188,29 +273,12 @@ export function registerContextTools(server: McpServer) {
 			limit: z.number().optional().default(5).describe('Max number of results'),
 		},
 		async ({ question, limit }) => {
-			// TODO: Wire to decision store — similarity search on past decisions
+			// TODO: Wire to decision store
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								question,
-								limit,
-								precedents: [
-									{
-										decision_id: 'placeholder',
-										question: 'placeholder: similar past question',
-										outcome: 'placeholder: what was decided',
-										confidence: 'placeholder',
-										timestamp: 'placeholder',
-									},
-								],
-							},
-							null,
-							2,
-						),
+						text: JSON.stringify({ _scaffold: true, question, limit, precedents: [] }, null, 2),
 					},
 				],
 			};
@@ -218,11 +286,8 @@ export function registerContextTools(server: McpServer) {
 	);
 
 	/**
-	 * get_rationale — Why does a rule or policy exist?
-	 *
-	 * Returns the structured reasoning behind a governance rule: the source
-	 * (incident, regulation, policy), the reference, the description, and
-	 * who authored it.
+	 * get_rationale — Why does a rule exist?
+	 * Reads from scenario YAML (OMD doesn't model enforcement rules).
 	 */
 	server.tool(
 		'get_rationale',
@@ -231,26 +296,13 @@ export function registerContextTools(server: McpServer) {
 			rule_name: z.string().describe('Name of the rule to get rationale for'),
 		},
 		async ({ rule_name }) => {
-			// TODO: Wire to context graph — traverse Rule → JUSTIFIED_BY → Rationale
+			// This stays in YAML — OMD doesn't model enforcement rules with rationale
+			// TODO: Wire to ScenarioLoader.businessRules
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								rule_name,
-								rationale: {
-									source: 'placeholder: incident|regulation|policy',
-									reference: 'placeholder: reference ID',
-									description: 'placeholder: why this rule exists',
-									author: 'placeholder',
-									date: 'placeholder',
-								},
-							},
-							null,
-							2,
-						),
+						text: JSON.stringify({ _scaffold: true, rule_name, rationale: null }, null, 2),
 					},
 				],
 			};

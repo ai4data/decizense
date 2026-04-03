@@ -21,6 +21,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { ScenarioLoader } from './config/index.js';
+import { initCatalog } from './catalog/index.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
 import { registerContextTools } from './tools/context.js';
@@ -66,6 +67,15 @@ async function main() {
 			password: db.password,
 		});
 		console.error(`[harness] Database: ${db.type}://${db.host}:${db.port}/${db.name}`);
+
+		// Initialize catalog (OMD) connection
+		const catalogClient = initCatalog(scenarioPath);
+		if (catalogClient) {
+			const healthy = await catalogClient.healthCheck();
+			console.error(`[harness] Catalog: ${healthy ? 'connected' : 'unreachable'} (${scenario.catalog?.url})`);
+		} else {
+			console.error('[harness] Catalog: not configured (using YAML only)');
+		}
 
 		// Initialize governance and control engines
 		initGovernance(scenarioPath);

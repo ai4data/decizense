@@ -18,6 +18,7 @@
  */
 
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
+import { getCatalogClient } from '../catalog/index.js';
 
 // ─── Types ───
 
@@ -244,8 +245,18 @@ export async function evaluateGovernance(params: {
 			}
 		}
 
-		// ── 6. PII column check ──
-		const piiColumns = loader.getPiiColumns();
+		// ── 6. PII column check (catalog-first, fallback to YAML) ──
+		let piiColumns: Set<string>;
+		const catalog = getCatalogClient();
+		if (catalog) {
+			try {
+				piiColumns = await catalog.getPiiColumns();
+			} catch {
+				piiColumns = loader.getPiiColumns();
+			}
+		} else {
+			piiColumns = loader.getPiiColumns();
+		}
 		const sqlLower = params.sql.toLowerCase();
 
 		for (const piiCol of piiColumns) {
