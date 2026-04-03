@@ -36,12 +36,19 @@ export function registerEventTools(server: McpServer) {
 		},
 		async ({ event_type, booking_id, flight_id, customer_id, ticket_id, metadata }) => {
 			try {
-				const metaJson = metadata ? `'${JSON.stringify(metadata).replace(/'/g, "''")}'` : "'{}'";
+				const metaJson = metadata ? JSON.stringify(metadata) : '{}';
 				const result = await executeQuery(
 					`INSERT INTO events (event_type, booking_id, flight_id, customer_id, ticket_id, timestamp, metadata)
-					 VALUES ('${event_type}', ${booking_id ?? 'NULL'}, ${flight_id ?? 'NULL'},
-					         ${customer_id ?? 'NULL'}, ${ticket_id ?? 'NULL'}, NOW(), ${metaJson}::jsonb)
+					 VALUES ($1, $2, $3, $4, $5, NOW(), $6::jsonb)
 					 RETURNING event_id, timestamp`,
+					[
+						event_type,
+						booking_id ?? null,
+						flight_id ?? null,
+						customer_id ?? null,
+						ticket_id ?? null,
+						metaJson,
+					],
 				);
 
 				const row = result.rows[0] as { event_id: number; timestamp: string };
@@ -89,9 +96,10 @@ export function registerEventTools(server: McpServer) {
 				const result = await executeQuery(
 					`SELECT event_id, event_type, timestamp, flight_id, ticket_id, metadata
 					 FROM events
-					 WHERE booking_id = ${booking_id}
+					 WHERE booking_id = $1
 					 ORDER BY timestamp ASC
 					 LIMIT 100`,
+					[booking_id],
 				);
 
 				// Calculate durations between steps
@@ -181,6 +189,7 @@ export function registerEventTools(server: McpServer) {
 			try {
 				let query: string;
 				let description: string;
+				const intervalParam = `${time_range_days} days`;
 
 				switch (signal_type) {
 					case 'event_distribution':
@@ -189,7 +198,7 @@ export function registerEventTools(server: McpServer) {
 							SELECT event_type, COUNT(*) as count,
 							       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percentage
 							FROM events
-							WHERE timestamp >= NOW() - INTERVAL '${time_range_days} days'
+							WHERE timestamp >= NOW() - $1::interval
 							GROUP BY event_type
 							ORDER BY count DESC
 							LIMIT 20`;
@@ -200,13 +209,13 @@ export function registerEventTools(server: McpServer) {
 						query = `
 							SELECT
 							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentFailed'
-							   AND timestamp >= NOW() - INTERVAL '${time_range_days} days') as payment_failures,
+							   AND timestamp >= NOW() - $1::interval) as payment_failures,
 							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentSucceeded'
-							   AND timestamp >= NOW() - INTERVAL '${time_range_days} days') as payment_successes,
+							   AND timestamp >= NOW() - $1::interval) as payment_successes,
 							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCancelled'
-							   AND timestamp >= NOW() - INTERVAL '${time_range_days} days') as cancellations,
+							   AND timestamp >= NOW() - $1::interval) as cancellations,
 							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCreated'
-							   AND timestamp >= NOW() - INTERVAL '${time_range_days} days') as total_bookings`;
+							   AND timestamp >= NOW() - $1::interval) as total_bookings`;
 						break;
 
 					case 'step_durations':
@@ -223,7 +232,7 @@ export function registerEventTools(server: McpServer) {
 							    AND e2.timestamp > e1.timestamp
 							    AND e2.event_type IN ('PaymentSucceeded', 'TicketIssued', 'CheckInCompleted', 'BoardingStarted')
 							    AND e1.event_type IN ('BookingCreated', 'PaymentSucceeded', 'TicketIssued', 'CheckInCompleted')
-							  WHERE e1.timestamp >= NOW() - INTERVAL '${time_range_days} days'
+							  WHERE e1.timestamp >= NOW() - $1::interval
 							    AND NOT EXISTS (
 							      SELECT 1 FROM events e3
 							      WHERE e3.booking_id = e1.booking_id
@@ -255,14 +264,14 @@ export function registerEventTools(server: McpServer) {
 							  ROUND(SUM(fd.delay_minutes)::numeric, 0) as total_minutes
 							FROM flight_delays fd
 							JOIN flights f ON fd.flight_id = f.flight_id
-							WHERE fd.reported_at >= NOW() - INTERVAL '${time_range_days} days'
+							WHERE fd.reported_at >= NOW() - $1::interval
 							GROUP BY fd.reason
 							ORDER BY delay_count DESC
 							LIMIT 10`;
 						break;
 				}
 
-				const result = await executeQuery(query);
+				const result = await executeQuery(query, [intervalParam]);
 
 				return {
 					content: [

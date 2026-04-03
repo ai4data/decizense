@@ -26,6 +26,7 @@ export function initDatabase(config: { host: string; port: number; database: str
 
 export async function executeQuery(
 	sql: string,
+	params?: unknown[],
 	timeoutMs: number = 30000,
 ): Promise<{ rows: Record<string, unknown>[]; rowCount: number; durationMs: number }> {
 	if (!pool) {
@@ -38,7 +39,7 @@ export async function executeQuery(
 	try {
 		// Set statement timeout
 		await client.query(`SET statement_timeout = ${timeoutMs}`);
-		const result = await client.query(sql);
+		const result = params ? await client.query(sql, params) : await client.query(sql);
 		const durationMs = Date.now() - start;
 
 		return {

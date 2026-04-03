@@ -317,19 +317,37 @@ export function registerAdminTools(server: McpServer) {
 		async ({ from_date, to_date, agent_id, confidence, limit }) => {
 			try {
 				const conditions: string[] = [];
-				if (from_date) conditions.push(`created_at >= '${from_date}'`);
-				if (to_date) conditions.push(`created_at <= '${to_date}'`);
-				if (confidence) conditions.push(`confidence = '${confidence}'`);
-				if (agent_id) conditions.push(`'${agent_id}' = ANY(agents_involved)`);
+				const params: unknown[] = [];
+
+				if (from_date) {
+					params.push(from_date);
+					conditions.push(`created_at >= $${params.length}`);
+				}
+				if (to_date) {
+					params.push(to_date);
+					conditions.push(`created_at <= $${params.length}`);
+				}
+				if (confidence) {
+					params.push(confidence);
+					conditions.push(`confidence = $${params.length}`);
+				}
+				if (agent_id) {
+					params.push(agent_id);
+					conditions.push(`$${params.length} = ANY(agents_involved)`);
+				}
 
 				const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+				params.push(limit ?? 20);
+				const limitParam = `$${params.length}`;
 
 				const result = await executeQuery(
 					`SELECT outcome_id, session_id, question, decision_summary, reasoning, confidence,
 					        agents_involved, cost_usd, evidence_event_ids, evidence_rules,
 					        evidence_signal_types, evidence_proposal_ids, created_at
 					 FROM decision_outcomes ${whereClause}
-					 ORDER BY created_at DESC LIMIT ${limit ?? 20}`,
+					 ORDER BY created_at DESC LIMIT ${limitParam}`,
+					params,
 				);
 
 				// Also get proposal/action details for each outcome
@@ -343,7 +361,8 @@ export function registerAdminTools(server: McpServer) {
 							 FROM decision_proposals p
 							 LEFT JOIN decision_approvals a ON p.proposal_id = a.proposal_id
 							 LEFT JOIN decision_actions act ON p.proposal_id = act.proposal_id
-							 WHERE p.proposal_id = ANY(ARRAY[${proposalIds.join(',')}])`,
+							 WHERE p.proposal_id = ANY($1)`,
+							[proposalIds],
 						);
 						outcome.proposals = proposals.rows;
 					}

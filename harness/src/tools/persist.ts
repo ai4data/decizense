@@ -10,9 +10,16 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
+import { ScenarioLoader } from '../config/index.js';
+
+let loader: ScenarioLoader | null = null;
+
+export function initPersistTools(scenarioPath: string) {
+	loader = new ScenarioLoader(scenarioPath);
+}
 
 export function registerPersistTools(server: McpServer) {
-	// ─── Findings (shared workspace, unchanged) ───
+	// ─── Findings (shared workspace) ───
 
 	server.tool(
 		'write_finding',
@@ -26,11 +33,11 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ session_id, agent_id, finding, confidence, data_sources }) => {
 			try {
-				const sources = data_sources ? `ARRAY[${data_sources.map((s) => `'${s}'`).join(',')}]` : 'NULL';
 				const result = await executeQuery(
 					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources)
-					 VALUES ('${session_id}', '${agent_id}', '${finding.replace(/'/g, "''")}', '${confidence}', ${sources})
+					 VALUES ($1, $2, $3, $4, $5)
 					 RETURNING finding_id, created_at`,
+					[session_id, agent_id, finding, confidence, data_sources ?? null],
 				);
 				const row = result.rows[0] as { finding_id: number; created_at: string };
 				return {
@@ -64,12 +71,20 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ session_id, agent_filter }) => {
 			try {
-				const filter = agent_filter ? `AND agent_id = '${agent_filter}'` : '';
-				const result = await executeQuery(
-					`SELECT finding_id, agent_id, finding, confidence, data_sources, created_at
-					 FROM decision_findings WHERE session_id = '${session_id}' ${filter}
-					 ORDER BY created_at ASC`,
-				);
+				let sql: string;
+				let params: unknown[];
+				if (agent_filter) {
+					sql = `SELECT finding_id, agent_id, finding, confidence, data_sources, created_at
+					       FROM decision_findings WHERE session_id = $1 AND agent_id = $2
+					       ORDER BY created_at ASC`;
+					params = [session_id, agent_filter];
+				} else {
+					sql = `SELECT finding_id, agent_id, finding, confidence, data_sources, created_at
+					       FROM decision_findings WHERE session_id = $1
+					       ORDER BY created_at ASC`;
+					params = [session_id];
+				}
+				const result = await executeQuery(sql, params);
 				return {
 					content: [
 						{
@@ -120,20 +135,21 @@ export function registerPersistTools(server: McpServer) {
 			evidence_rules,
 		}) => {
 			try {
-				const eventIds = evidence_event_ids?.length ? `ARRAY[${evidence_event_ids.join(',')}]` : 'NULL';
-				const signalTypes = evidence_signal_types?.length
-					? `ARRAY[${evidence_signal_types.map((s) => `'${s}'`).join(',')}]`
-					: 'NULL';
-				const rules = evidence_rules?.length
-					? `ARRAY[${evidence_rules.map((r) => `'${r}'`).join(',')}]`
-					: 'NULL';
-
 				const result = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
 					   evidence_event_ids, evidence_signal_types, evidence_rules)
-					 VALUES ('${session_id}', '${agent_id}', '${proposed_action.replace(/'/g, "''")}',
-					   '${confidence}', '${risk_class}', ${eventIds}, ${signalTypes}, ${rules})
+					 VALUES ($1, $2, $3, $4, $5, $6::integer[], $7::text[], $8::text[])
 					 RETURNING proposal_id, status, created_at`,
+					[
+						session_id,
+						agent_id,
+						proposed_action,
+						confidence,
+						risk_class,
+						evidence_event_ids ?? null,
+						evidence_signal_types ?? null,
+						evidence_rules ?? null,
+					],
 				);
 				const row = result.rows[0] as { proposal_id: number; status: string; created_at: string };
 
@@ -179,18 +195,49 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ proposal_id, approved, approved_by, reason }) => {
 			try {
+				// Permission check: verify the approver has rights for this risk class
+				const proposalCheck = await executeQuery(
+					'SELECT risk_class FROM decision_proposals WHERE proposal_id = $1',
+					[proposal_id],
+				);
+				if (proposalCheck.rowCount === 0) {
+					return {
+						content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Proposal not found' }) }],
+					};
+				}
+				const riskClass = (proposalCheck.rows[0] as { risk_class: string }).risk_class;
+
+				// Check approver permissions if it's an agent (not "auto" or "human:*")
+				if (loader && !approved_by.startsWith('human:') && approved_by !== 'auto') {
+					const permissions = loader.agents.permissions ?? {};
+					const approverPerms = permissions[approved_by];
+					if (approverPerms && !approverPerms.can_approve.includes(riskClass)) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: JSON.stringify({
+										error: `Agent ${approved_by} cannot approve ${riskClass}-risk proposals. Allowed: ${approverPerms.can_approve.join(', ')}`,
+									}),
+								},
+							],
+						};
+					}
+				}
+
 				// Insert approval record
-				const reasonSql = reason ? `'${reason.replace(/'/g, "''")}'` : 'NULL';
 				await executeQuery(
 					`INSERT INTO decision_approvals (proposal_id, approved_by, approved, reason)
-					 VALUES (${proposal_id}, '${approved_by}', ${approved}, ${reasonSql})`,
+					 VALUES ($1, $2, $3, $4)`,
+					[proposal_id, approved_by, approved, reason ?? null],
 				);
 
 				// Update proposal status
 				const newStatus = approved ? 'approved' : 'rejected';
-				await executeQuery(
-					`UPDATE decision_proposals SET status = '${newStatus}' WHERE proposal_id = ${proposal_id}`,
-				);
+				await executeQuery(`UPDATE decision_proposals SET status = $1 WHERE proposal_id = $2`, [
+					newStatus,
+					proposal_id,
+				]);
 
 				return {
 					content: [
@@ -225,16 +272,18 @@ export function registerPersistTools(server: McpServer) {
 		'Execute an approved decision action (notification, rebooking, etc.)',
 		{
 			proposal_id: z.number().describe('Approved proposal to execute'),
+			executor_id: z.string().describe('Agent or operator executing the action'),
 			action_type: z
 				.string()
 				.describe('Action type: notify_customer, rebook_passenger, issue_compensation, escalate'),
 			parameters: z.record(z.string()).describe('Action parameters'),
 		},
-		async ({ proposal_id, action_type, parameters }) => {
+		async ({ proposal_id, executor_id, action_type, parameters }) => {
 			try {
 				// Verify proposal is approved
 				const check = await executeQuery(
-					`SELECT status, risk_class FROM decision_proposals WHERE proposal_id = ${proposal_id}`,
+					`SELECT status, risk_class FROM decision_proposals WHERE proposal_id = $1`,
+					[proposal_id],
 				);
 				if (check.rowCount === 0) {
 					return {
@@ -255,19 +304,37 @@ export function registerPersistTools(server: McpServer) {
 					};
 				}
 
+				// Permission check: can this executor execute at this risk level?
+				if (loader && !executor_id.startsWith('human:')) {
+					const permissions = loader.agents.permissions ?? {};
+					const execPerms = permissions[executor_id];
+					if (execPerms && !execPerms.can_execute.includes(proposal.risk_class)) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: JSON.stringify({
+										error: `Agent ${executor_id} cannot execute ${proposal.risk_class}-risk actions. Allowed: ${execPerms.can_execute.join(', ')}`,
+									}),
+								},
+							],
+						};
+					}
+				}
+
 				// Insert action record
-				const paramsJson = JSON.stringify(parameters).replace(/'/g, "''");
 				const result = await executeQuery(
 					`INSERT INTO decision_actions (proposal_id, action_type, parameters, status)
-					 VALUES (${proposal_id}, '${action_type}', '${paramsJson}'::jsonb, 'completed')
+					 VALUES ($1, $2, $3::jsonb, 'completed')
 					 RETURNING action_id, created_at`,
+					[proposal_id, action_type, JSON.stringify(parameters)],
 				);
 				const row = result.rows[0] as { action_id: number; created_at: string };
 
 				// Update proposal status
-				await executeQuery(
-					`UPDATE decision_proposals SET status = 'executed' WHERE proposal_id = ${proposal_id}`,
-				);
+				await executeQuery(`UPDATE decision_proposals SET status = 'executed' WHERE proposal_id = $1`, [
+					proposal_id,
+				]);
 
 				return {
 					content: [
@@ -327,30 +394,32 @@ export function registerPersistTools(server: McpServer) {
 			evidence_proposal_ids,
 		}) => {
 			try {
-				const agents = `ARRAY[${agents_involved.map((a) => `'${a}'`).join(',')}]`;
-				const eventIds = evidence_event_ids?.length ? `ARRAY[${evidence_event_ids.join(',')}]` : 'NULL';
-				const rules = evidence_rules?.length
-					? `ARRAY[${evidence_rules.map((r) => `'${r}'`).join(',')}]`
-					: 'NULL';
-				const signals = evidence_signal_types?.length
-					? `ARRAY[${evidence_signal_types.map((s) => `'${s}'`).join(',')}]`
-					: 'NULL';
-				const proposals = evidence_proposal_ids?.length ? `ARRAY[${evidence_proposal_ids.join(',')}]` : 'NULL';
-
 				const result = await executeQuery(
 					`INSERT INTO decision_outcomes (session_id, question, decision_summary, reasoning, confidence,
 					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids)
-					 VALUES ('${session_id}', '${question.replace(/'/g, "''")}', '${decision_summary.replace(/'/g, "''")}',
-					   '${reasoning.replace(/'/g, "''")}', '${confidence}', ${agents}, ${cost_usd ?? 0},
-					   ${eventIds}, ${rules}, ${signals}, ${proposals})
+					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[])
 					 RETURNING outcome_id, created_at`,
+					[
+						session_id,
+						question,
+						decision_summary,
+						reasoning,
+						confidence,
+						agents_involved,
+						cost_usd ?? 0,
+						evidence_event_ids ?? null,
+						evidence_rules ?? null,
+						evidence_signal_types ?? null,
+						evidence_proposal_ids ?? null,
+					],
 				);
 				const row = result.rows[0] as { outcome_id: number; created_at: string };
 
 				// Update all proposals in this session to completed
 				if (evidence_proposal_ids?.length) {
 					await executeQuery(
-						`UPDATE decision_proposals SET status = 'completed' WHERE proposal_id = ANY(ARRAY[${evidence_proposal_ids.join(',')}])`,
+						`UPDATE decision_proposals SET status = 'completed' WHERE proposal_id = ANY($1::integer[])`,
+						[evidence_proposal_ids],
 					);
 				}
 
@@ -375,7 +444,7 @@ export function registerPersistTools(server: McpServer) {
 		},
 	);
 
-	// ─── Memory (cross-session, unchanged) ───
+	// ─── Memory (cross-session) ───
 
 	server.tool(
 		'save_memory',
@@ -389,8 +458,9 @@ export function registerPersistTools(server: McpServer) {
 			try {
 				await executeQuery(
 					`INSERT INTO agent_memory (agent_id, key, content)
-					 VALUES ('${agent_id}', '${key.replace(/'/g, "''")}', '${content.replace(/'/g, "''")}')
+					 VALUES ($1, $2, $3)
 					 ON CONFLICT (agent_id, key) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+					[agent_id, key, content],
 				);
 				return {
 					content: [
@@ -417,11 +487,18 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ agent_id, key }) => {
 			try {
-				const filter = key ? `AND key = '${key.replace(/'/g, "''")}'` : '';
-				const result = await executeQuery(
-					`SELECT key, content, updated_at FROM agent_memory
-					 WHERE agent_id = '${agent_id}' ${filter} ORDER BY updated_at DESC`,
-				);
+				let sql: string;
+				let params: unknown[];
+				if (key) {
+					sql = `SELECT key, content, updated_at FROM agent_memory
+					       WHERE agent_id = $1 AND key = $2 ORDER BY updated_at DESC`;
+					params = [agent_id, key];
+				} else {
+					sql = `SELECT key, content, updated_at FROM agent_memory
+					       WHERE agent_id = $1 ORDER BY updated_at DESC`;
+					params = [agent_id];
+				}
+				const result = await executeQuery(sql, params);
 				return {
 					content: [
 						{

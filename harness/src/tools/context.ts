@@ -284,17 +284,25 @@ export function registerContextTools(server: McpServer) {
 					.filter((w) => w.length > 3)
 					.slice(0, 5);
 
-				const conditions = keywords
-					.map((kw) => `(LOWER(question) LIKE '%${kw}%' OR LOWER(decision) LIKE '%${kw}%')`)
-					.join(' OR ');
+				const params: unknown[] = [];
+				const conditions = keywords.map((kw) => {
+					params.push(`%${kw}%`);
+					const idx = params.length;
+					return `(LOWER(question) LIKE $${idx} OR LOWER(decision_summary) LIKE $${idx})`;
+				});
 
-				const whereClause = conditions ? `WHERE ${conditions}` : '';
+				const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' OR ')}` : '';
+
+				params.push(limit ?? 5);
+				const limitParam = `$${params.length}`;
+
 				const result = await executeQuery(
 					`SELECT outcome_id, session_id, question, decision_summary, reasoning, confidence,
 					        agents_involved, cost_usd, evidence_event_ids, evidence_rules,
 					        evidence_signal_types, evidence_proposal_ids, created_at
 					 FROM decision_outcomes ${whereClause}
-					 ORDER BY created_at DESC LIMIT ${limit ?? 5}`,
+					 ORDER BY created_at DESC LIMIT ${limitParam}`,
+					params,
 				);
 
 				return {

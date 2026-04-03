@@ -28,7 +28,7 @@ import { registerContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
 import { registerEventTools } from './tools/event.js';
-import { registerPersistTools } from './tools/persist.js';
+import { registerPersistTools, initPersistTools } from './tools/persist.js';
 import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
 import { registerAdminTools, initAdminTools } from './tools/admin.js';
 
@@ -83,6 +83,7 @@ async function main() {
 		initGovernance(scenarioPath);
 		initControlTools(scenarioPath);
 		initActionTools(scenarioPath);
+		initPersistTools(scenarioPath);
 		initVerifyTools(scenarioPath);
 		initAdminTools(scenarioPath);
 		const agents = loader.agents;

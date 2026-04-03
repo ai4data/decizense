@@ -59,8 +59,12 @@ export function registerActionTools(server: McpServer) {
 			}
 
 			try {
-				const result = await executeQuery(sql, 30000);
-				const filtered = filterPiiFromResults(result.rows, governance.blocked_columns ?? []);
+				const result = await executeQuery(sql, undefined, 30000);
+				// Defense in depth: always filter ALL known PII columns from results
+				const filtered = filterPiiFromResults(
+					result.rows,
+					governance.all_pii_columns ?? governance.blocked_columns ?? [],
+				);
 				return {
 					content: [
 						{

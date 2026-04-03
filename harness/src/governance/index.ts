@@ -32,6 +32,7 @@ export interface GovernanceResult {
 	allowed: boolean;
 	reason?: string;
 	blocked_columns?: string[];
+	all_pii_columns?: string[];
 	warnings?: string[];
 	applicable_rules?: string[];
 	contract_id?: string;
@@ -259,13 +260,26 @@ export async function evaluateGovernance(params: {
 		}
 		const sqlLower = params.sql.toLowerCase();
 
+		// Check if SELECT * is used on a table with PII columns
+		const usesSelectStar = /select\s+\*/.test(sqlLower);
+		const queriedTables = new Set<string>();
+		const tablePattern = /(?:from|join)\s+([a-z_][a-z0-9_.]*)/gi;
+		let tableMatch;
+		while ((tableMatch = tablePattern.exec(params.sql)) !== null) {
+			queriedTables.add(tableMatch[1].toLowerCase().replace(/^public\./, ''));
+		}
+
 		for (const piiCol of piiColumns) {
 			// piiCol format: "public.customers.first_name"
 			const parts = piiCol.split('.');
 			const colName = parts[parts.length - 1];
-			// Check if column name appears in SQL
-			const pattern = new RegExp(`\\b${colName}\\b`, 'i');
-			if (pattern.test(sqlLower)) {
+			const tableName = parts.length >= 2 ? parts[parts.length - 2] : '';
+
+			// Block if: column name in SQL text, OR SELECT * on a PII table
+			const colInSql = new RegExp(`\\b${colName}\\b`, 'i').test(sqlLower);
+			const starOnPiiTable = usesSelectStar && queriedTables.has(tableName);
+
+			if (colInSql || starOnPiiTable) {
 				blockedColumns.push(piiCol);
 			}
 		}
@@ -318,9 +332,22 @@ export async function evaluateGovernance(params: {
 	const contractId = `contract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 	checks.push({ name: 'approved', passed: true, detail: `Contract ${contractId}` });
 
+	// Get all PII columns for defense-in-depth result filtering
+	const allPii = loader.getPiiColumns();
+	const catalog = getCatalogClient();
+	if (catalog) {
+		try {
+			const catalogPii = await catalog.getPiiColumns();
+			for (const col of catalogPii) allPii.add(col);
+		} catch {
+			/* catalog unavailable */
+		}
+	}
+
 	return {
 		allowed: true,
 		blocked_columns: blockedColumns,
+		all_pii_columns: [...allPii],
 		warnings,
 		applicable_rules: [],
 		contract_id: contractId,
