@@ -18,7 +18,7 @@
  */
 
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
-import { getCatalogClient } from '../catalog/index.js';
+import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
 
 // ─── Types ───
 
