@@ -27,6 +27,7 @@ import { initGovernance } from './governance/index.js';
 import { registerContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools } from './tools/action.js';
+import { registerEventTools } from './tools/event.js';
 import { registerPersistTools } from './tools/persist.js';
 import { registerVerifyTools } from './tools/verify.js';
 import { registerAdminTools } from './tools/admin.js';
@@ -37,11 +38,12 @@ const server = new McpServer({
 });
 
 // ── Agent-facing tools (agents call these) ──
-registerContextTools(server); // get_context, get_lineage, search_glossary, etc.
-registerControlTools(server); // initialize_agent, get_business_rules
-registerActionTools(server); // query_data, query_metrics, execute_action (governance enforced internally)
-registerPersistTools(server); // write_finding, read_findings, log_decision, memory
-registerVerifyTools(server); // verify_result, check_freshness, check_consistency, get_confidence
+registerContextTools(server); // Layer 1+2: get_context, get_lineage, search_glossary, etc.
+registerControlTools(server); // Layer 2: initialize_agent, get_business_rules
+registerEventTools(server); // Layer 3: ingest_event, get_case_timeline, get_process_signals
+registerActionTools(server); // Layer 5: query_data, query_metrics, execute_action (governance internal)
+registerPersistTools(server); // Layer 4: write_finding, read_findings, log_decision, memory
+registerVerifyTools(server); // Verify: verify_result, check_freshness, check_consistency
 
 // ── Admin tools (governance teams, not agents) ──
 registerAdminTools(server); // find_governance_gaps, simulate_removal, graph_stats, audit_decisions
