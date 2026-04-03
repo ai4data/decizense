@@ -290,8 +290,10 @@ export function registerContextTools(server: McpServer) {
 
 				const whereClause = conditions ? `WHERE ${conditions}` : '';
 				const result = await executeQuery(
-					`SELECT decision_id, session_id, question, decision, reasoning, confidence, agents_involved, cost_usd, created_at
-					 FROM decision_log ${whereClause}
+					`SELECT outcome_id, session_id, question, decision_summary, reasoning, confidence,
+					        agents_involved, cost_usd, evidence_event_ids, evidence_rules,
+					        evidence_signal_types, evidence_proposal_ids, created_at
+					 FROM decision_outcomes ${whereClause}
 					 ORDER BY created_at DESC LIMIT ${limit ?? 5}`,
 				);
 
