@@ -1,60 +1,130 @@
 /**
- * ADMIN tools — For governance teams, not for agents during sessions.
+ * ADMIN tools — for governance teams, not agents during sessions.
  *
- * These tools help data governance teams audit the system, find coverage
- * gaps, and simulate changes. They are NOT called by agents during
- * normal operation — they're for humans reviewing the governance setup.
- *
- * In production, these would be behind a separate admin MCP endpoint
- * or exposed through a governance dashboard.
+ * Audit, gap detection, impact analysis, and decision review.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { executeQuery } from '../database/index.js';
+import { ScenarioLoader } from '../config/index.js';
+import { getCatalogClient } from '../catalog/index.js';
+
+let loader: ScenarioLoader | null = null;
+
+export function initAdminTools(scenarioPath: string) {
+	loader = new ScenarioLoader(scenarioPath);
+}
 
 export function registerAdminTools(server: McpServer) {
 	/**
-	 * find_governance_gaps — Where is governance coverage missing?
-	 *
-	 * Scans the context graph for:
-	 * - PII columns classified but not blocked by policy
-	 * - Tables in bundles without business rules
-	 * - Measures without applicable rules
-	 * - Tables not in any bundle (orphans)
+	 * find_governance_gaps — Scan for unblocked PII, ungoverned tables.
 	 */
 	server.tool(
 		'find_governance_gaps',
-		'[Admin] Find gaps in governance coverage — unblocked PII, ungoverned measures, orphan tables',
+		'[Admin] Find gaps in governance coverage — unblocked PII, ungoverned tables',
 		{
-			check: z
-				.enum(['pii', 'models', 'rules', 'all'])
-				.optional()
-				.default('all')
-				.describe('Which gaps to check for'),
+			check: z.enum(['pii', 'bundles', 'rules', 'all']).optional().default('all').describe('Which gaps to check'),
 		},
 		async ({ check }) => {
-			// TODO: Wire to GovernanceGraph.findGaps() + findUnblockedPiiColumns()
+			if (!loader) {
+				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
+			}
+
+			const gaps: Array<{ type: string; entity: string; description: string }> = [];
+			const catalog = getCatalogClient();
+
+			// PII gaps: columns tagged as PII in catalog but not in policy
+			if (check === 'pii' || check === 'all') {
+				if (catalog) {
+					try {
+						const catalogPii = await catalog.getPiiColumns();
+						const policyPii = loader.getPiiColumns();
+						for (const col of catalogPii) {
+							if (!policyPii.has(col)) {
+								gaps.push({
+									type: 'pii_not_in_policy',
+									entity: col,
+									description: `Column ${col} tagged as PII in catalog but not blocked in policy.yml`,
+								});
+							}
+						}
+						for (const col of policyPii) {
+							if (!catalogPii.has(col)) {
+								gaps.push({
+									type: 'pii_not_in_catalog',
+									entity: col,
+									description: `Column ${col} blocked in policy.yml but not tagged as PII in catalog`,
+								});
+							}
+						}
+					} catch {
+						gaps.push({
+							type: 'catalog_error',
+							entity: 'catalog',
+							description: 'Could not check PII in catalog',
+						});
+					}
+				}
+			}
+
+			// Bundle gaps: tables in database not in any bundle
+			if (check === 'bundles' || check === 'all') {
+				const allBundles = loader.getAllBundles();
+				const bundledTables = new Set<string>();
+				for (const bundle of allBundles) {
+					for (const t of bundle.tables) {
+						bundledTables.add(t.table);
+					}
+				}
+
+				if (catalog) {
+					try {
+						const catalogTables = await catalog.listTables();
+						for (const table of catalogTables) {
+							if (!bundledTables.has(table.name)) {
+								gaps.push({
+									type: 'table_not_in_bundle',
+									entity: table.name,
+									description: `Table ${table.name} exists in catalog but not in any dataset bundle`,
+								});
+							}
+						}
+					} catch {
+						// Catalog unavailable
+					}
+				}
+			}
+
+			// Rule gaps: tables in bundles without business rules
+			if (check === 'rules' || check === 'all') {
+				const allBundles = loader.getAllBundles();
+				const allRules = loader.businessRules;
+				const ruledTables = new Set<string>();
+				for (const rule of allRules) {
+					for (const target of rule.applies_to) {
+						ruledTables.add(target.split('.')[0].toLowerCase());
+					}
+				}
+
+				for (const bundle of allBundles) {
+					for (const t of bundle.tables) {
+						if (!ruledTables.has(t.table.toLowerCase())) {
+							gaps.push({
+								type: 'table_no_rules',
+								entity: `${bundle.bundle_id}/${t.table}`,
+								description: `Table ${t.table} in bundle ${bundle.bundle_id} has no business rules`,
+							});
+						}
+					}
+				}
+			}
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								check,
-								gaps: [
-									{
-										node_id: 'placeholder',
-										node_type: 'placeholder',
-										missing_edge: 'placeholder',
-										description: 'placeholder: what governance is missing',
-									},
-								],
-								total_gaps: 0,
-							},
-							null,
-							2,
-						),
+						text: JSON.stringify({ check, total_gaps: gaps.length, gaps }, null, 2),
 					},
 				],
 			};
@@ -62,38 +132,97 @@ export function registerAdminTools(server: McpServer) {
 	);
 
 	/**
-	 * simulate_removal — What breaks if we remove an entity?
-	 *
-	 * Non-destructive simulation: temporarily removes nodes from the graph
-	 * and reports new governance gaps that would appear.
+	 * simulate_removal — What breaks if we remove a table?
 	 */
 	server.tool(
 		'simulate_removal',
-		'[Admin] Simulate removing entities and report what breaks',
+		'[Admin] Simulate removing a table and report what breaks',
 		{
-			removals: z.array(z.string()).describe('Entity IDs to simulate removing'),
+			table_name: z.string().describe('Table name to simulate removing'),
 		},
-		async ({ removals }) => {
-			// TODO: Wire to GovernanceGraph.simulate()
+		async ({ table_name }) => {
+			if (!loader) {
+				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
+			}
+
+			const impact: Array<{ type: string; entity: string; description: string }> = [];
+
+			// Check bundles that contain this table
+			const allBundles = loader.getAllBundles();
+			for (const bundle of allBundles) {
+				if (bundle.tables.some((t) => t.table === table_name)) {
+					impact.push({
+						type: 'bundle_broken',
+						entity: bundle.bundle_id,
+						description: `Bundle ${bundle.bundle_id} contains ${table_name} — would lose access`,
+					});
+
+					// Check joins that reference this table
+					for (const join of bundle.joins ?? []) {
+						if (join.left.table === table_name || join.right.table === table_name) {
+							impact.push({
+								type: 'join_broken',
+								entity: `${join.left.table}.${join.left.column} = ${join.right.table}.${join.right.column}`,
+								description: `Join would break in bundle ${bundle.bundle_id}`,
+							});
+						}
+					}
+				}
+			}
+
+			// Check business rules that reference this table
+			const allRules = loader.businessRules;
+			for (const rule of allRules) {
+				for (const target of rule.applies_to) {
+					if (target.toLowerCase().startsWith(table_name.toLowerCase())) {
+						impact.push({
+							type: 'rule_orphaned',
+							entity: rule.name,
+							description: `Rule ${rule.name} applies to ${target} — would become orphaned`,
+						});
+					}
+				}
+			}
+
+			// Check semantic model
+			const semanticModel = loader.semanticModel;
+			for (const model of semanticModel.models) {
+				if (model.table.table === table_name) {
+					impact.push({
+						type: 'model_broken',
+						entity: model.name,
+						description: `Semantic model ${model.name} wraps ${table_name} — ${model.measures.length} measures and ${model.dimensions.length} dimensions would break`,
+					});
+				}
+			}
+
+			// Check lineage from catalog
+			const catalog = getCatalogClient();
+			if (catalog) {
+				try {
+					const fqn = `travel_postgres.travel_db.public.${table_name}`;
+					const lineage = await catalog.getLineage(fqn);
+					for (const edge of lineage) {
+						impact.push({
+							type: 'lineage_broken',
+							entity: `${edge.from.split('.').pop()} → ${edge.to.split('.').pop()}`,
+							description: `Lineage dependency would break`,
+						});
+					}
+				} catch {
+					// Catalog unavailable
+				}
+			}
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
 						text: JSON.stringify(
 							{
-								_scaffold: true,
-								removals,
-								impact: {
-									removed_nodes: removals,
-									new_gaps: [
-										{
-											node_id: 'placeholder',
-											node_type: 'placeholder',
-											missing_edge: 'placeholder',
-											description: 'placeholder: governance gap created',
-										},
-									],
-								},
+								table: table_name,
+								total_impact: impact.length,
+								impact,
 							},
 							null,
 							2,
@@ -105,54 +234,75 @@ export function registerAdminTools(server: McpServer) {
 	);
 
 	/**
-	 * graph_stats — Overview of the governance graph.
-	 *
-	 * Node and edge counts by type. Quick health check of
-	 * governance coverage.
+	 * graph_stats — Overview statistics.
 	 */
-	server.tool(
-		'graph_stats',
-		'[Admin] Get governance graph statistics — node and edge counts by type',
-		{},
-		async () => {
-			// TODO: Wire to GovernanceGraph.stats()
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								nodes_by_type: {
-									Table: 0,
-									Column: 0,
-									Measure: 0,
-									Rule: 0,
-									GlossaryTerm: 0,
-								},
-								edges_by_type: {
-									BLOCKS: 0,
-									CLASSIFIES: 0,
-									APPLIES_TO: 0,
-									PIPELINE_FEEDS: 0,
-								},
-								total_nodes: 0,
-								total_edges: 0,
+	server.tool('graph_stats', '[Admin] Get governance statistics — tables, rules, agents, decisions', {}, async () => {
+		if (!loader) {
+			return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
+		}
+
+		const allBundles = loader.getAllBundles();
+		const allRules = loader.businessRules;
+		const agents = Object.keys(loader.agents.agents);
+		const policy = loader.policy;
+
+		// Count decisions from database
+		let decisionCount = 0;
+		let findingCount = 0;
+		try {
+			const dResult = await executeQuery('SELECT COUNT(*) as count FROM decision_outcomes');
+			decisionCount = parseInt((dResult.rows[0] as { count: string }).count);
+			const fResult = await executeQuery('SELECT COUNT(*) as count FROM decision_findings');
+			findingCount = parseInt((fResult.rows[0] as { count: string }).count);
+		} catch {
+			// Tables may not exist
+		}
+
+		// Count tables from catalog
+		let catalogTableCount = 0;
+		let glossaryTermCount = 0;
+		const catalog = getCatalogClient();
+		if (catalog) {
+			try {
+				const tables = await catalog.listTables();
+				catalogTableCount = tables.length;
+				const terms = await catalog.listGlossaryTerms();
+				glossaryTermCount = terms.length;
+			} catch {
+				// Catalog unavailable
+			}
+		}
+
+		return {
+			content: [
+				{
+					type: 'text' as const,
+					text: JSON.stringify(
+						{
+							catalog: { tables: catalogTableCount, glossary_terms: glossaryTermCount },
+							governance: {
+								bundles: allBundles.length,
+								business_rules: allRules.length,
+								pii_columns: [...loader.getPiiColumns()].length,
+								agents: agents.length,
 							},
-							null,
-							2,
-						),
-					},
-				],
-			};
-		},
-	);
+							decisions: { outcomes: decisionCount, findings: findingCount },
+							policy: {
+								max_rows: policy.defaults.max_rows,
+								pii_mode: policy.pii.mode,
+								risk_levels: Object.keys(policy.actions?.risk_classification ?? {}),
+							},
+						},
+						null,
+						2,
+					),
+				},
+			],
+		};
+	});
 
 	/**
 	 * audit_decisions — Query past decisions for compliance.
-	 *
-	 * Search the decision store by time range, agent, outcome, or question.
-	 * For compliance reporting and governance audits.
 	 */
 	server.tool(
 		'audit_decisions',
@@ -165,34 +315,61 @@ export function registerAdminTools(server: McpServer) {
 			limit: z.number().optional().default(20).describe('Max results'),
 		},
 		async ({ from_date, to_date, agent_id, confidence, limit }) => {
-			// TODO: Wire to decision store — query with filters
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								filters: { from_date, to_date, agent_id, confidence },
-								decisions: [
-									{
-										decision_id: 'placeholder',
-										question: 'placeholder',
-										decision: 'placeholder',
-										confidence: 'high',
-										agents_involved: [],
-										cost_usd: 0,
-										timestamp: 'placeholder',
-									},
-								],
-								total: 0,
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+			try {
+				const conditions: string[] = [];
+				if (from_date) conditions.push(`created_at >= '${from_date}'`);
+				if (to_date) conditions.push(`created_at <= '${to_date}'`);
+				if (confidence) conditions.push(`confidence = '${confidence}'`);
+				if (agent_id) conditions.push(`'${agent_id}' = ANY(agents_involved)`);
+
+				const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+				const result = await executeQuery(
+					`SELECT outcome_id, session_id, question, decision_summary, reasoning, confidence,
+					        agents_involved, cost_usd, evidence_event_ids, evidence_rules,
+					        evidence_signal_types, evidence_proposal_ids, created_at
+					 FROM decision_outcomes ${whereClause}
+					 ORDER BY created_at DESC LIMIT ${limit ?? 20}`,
+				);
+
+				// Also get proposal/action details for each outcome
+				const outcomes = result.rows as Array<Record<string, unknown>>;
+				for (const outcome of outcomes) {
+					const proposalIds = outcome.evidence_proposal_ids as number[] | null;
+					if (proposalIds?.length) {
+						const proposals = await executeQuery(
+							`SELECT p.proposal_id, p.risk_class, p.status, a.approved_by, a.approved,
+							        act.action_type, act.status as action_status
+							 FROM decision_proposals p
+							 LEFT JOIN decision_approvals a ON p.proposal_id = a.proposal_id
+							 LEFT JOIN decision_actions act ON p.proposal_id = act.proposal_id
+							 WHERE p.proposal_id = ANY(ARRAY[${proposalIds.join(',')}])`,
+						);
+						outcome.proposals = proposals.rows;
+					}
+				}
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									filters: { from_date, to_date, agent_id, confidence },
+									total: result.rowCount,
+									decisions: outcomes,
+								},
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: (err as Error).message }) }],
+				};
+			}
 		},
 	);
 }

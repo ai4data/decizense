@@ -29,8 +29,8 @@ import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
 import { registerEventTools } from './tools/event.js';
 import { registerPersistTools } from './tools/persist.js';
-import { registerVerifyTools } from './tools/verify.js';
-import { registerAdminTools } from './tools/admin.js';
+import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
+import { registerAdminTools, initAdminTools } from './tools/admin.js';
 
 const server = new McpServer({
 	name: 'dazense-harness',
@@ -79,10 +79,12 @@ async function main() {
 			console.error('[harness] Catalog: not configured (using YAML only)');
 		}
 
-		// Initialize governance, control, and action engines
+		// Initialize all engines
 		initGovernance(scenarioPath);
 		initControlTools(scenarioPath);
 		initActionTools(scenarioPath);
+		initVerifyTools(scenarioPath);
+		initAdminTools(scenarioPath);
 		const agents = loader.agents;
 		const agentNames = Object.keys(agents.agents);
 		console.error(`[harness] Agents: ${agentNames.join(', ')}`);
