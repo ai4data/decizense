@@ -10,6 +10,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getCatalogClient } from '../catalog/index.js';
+import { executeQuery } from '../database/index.js';
 
 export function registerContextTools(server: McpServer) {
 	/**
@@ -262,8 +263,10 @@ export function registerContextTools(server: McpServer) {
 	);
 
 	/**
-	 * search_precedent — Find similar past decisions.
-	 * Still scaffold — needs decision store.
+	 * search_precedent — Find similar past decisions from the decision store.
+	 *
+	 * Searches by keyword matching in question and decision text.
+	 * Returns past decisions with reasoning and confidence.
 	 */
 	server.tool(
 		'search_precedent',
@@ -273,15 +276,47 @@ export function registerContextTools(server: McpServer) {
 			limit: z.number().optional().default(5).describe('Max number of results'),
 		},
 		async ({ question, limit }) => {
-			// TODO: Wire to decision store
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify({ _scaffold: true, question, limit, precedents: [] }, null, 2),
-					},
-				],
-			};
+			try {
+				// Extract keywords for search (words > 3 chars)
+				const keywords = question
+					.toLowerCase()
+					.split(/\s+/)
+					.filter((w) => w.length > 3)
+					.slice(0, 5);
+
+				const conditions = keywords
+					.map((kw) => `(LOWER(question) LIKE '%${kw}%' OR LOWER(decision) LIKE '%${kw}%')`)
+					.join(' OR ');
+
+				const whereClause = conditions ? `WHERE ${conditions}` : '';
+				const result = await executeQuery(
+					`SELECT decision_id, session_id, question, decision, reasoning, confidence, agents_involved, cost_usd, created_at
+					 FROM decision_log ${whereClause}
+					 ORDER BY created_at DESC LIMIT ${limit ?? 5}`,
+				);
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{ question, precedents: result.rows, total: result.rowCount },
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ question, precedents: [], total: 0 }, null, 2),
+						},
+					],
+				};
+			}
 		},
 	);
 

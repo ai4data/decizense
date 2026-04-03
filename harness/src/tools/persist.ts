@@ -5,22 +5,19 @@
  * intermediate findings. The orchestrator reads all findings to combine
  * into a decision. Decisions become precedent for future sessions.
  *
- * This is the "filesystem" equivalent from the agent harness article —
- * structured, governed, queryable shared state.
+ * All data persisted to PostgreSQL (same instance as scenario data).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { executeQuery } from '../database/index.js';
 
 export function registerPersistTools(server: McpServer) {
 	/**
 	 * write_finding — Agent stores an intermediate result.
 	 *
-	 * During a multi-agent session, each domain agent writes its findings
-	 * to the shared workspace. The orchestrator reads all findings to
-	 * combine into a final decision.
-	 *
-	 * PII is stripped from findings. Findings are append-only (tamper-evident).
+	 * Creates the session if it doesn't exist, then inserts the finding.
+	 * PII should not be included in findings (enforced by inter-agent rules).
 	 */
 	server.tool(
 		'write_finding',
@@ -30,40 +27,56 @@ export function registerPersistTools(server: McpServer) {
 			agent_id: z.string().describe('Agent writing the finding'),
 			finding: z.string().describe('The finding content (PII must not be included)'),
 			confidence: z.enum(['high', 'medium', 'low']).describe('Confidence in this finding'),
-			data_sources: z.array(z.string()).optional().describe('Tables/measures used to produce this finding'),
+			data_sources: z.array(z.string()).optional().describe('Tables/measures used'),
 		},
 		async ({ session_id, agent_id, finding, confidence, data_sources }) => {
-			// TODO: Wire to decision store — insert finding into PostgreSQL
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
+			try {
+				// Ensure session exists
+				await executeQuery(
+					`INSERT INTO decision_sessions (session_id, question, status)
+					 VALUES ('${session_id}', '', 'active')
+					 ON CONFLICT (session_id) DO NOTHING`,
+				);
+
+				// Insert finding
+				const sources = data_sources ? `ARRAY[${data_sources.map((s) => `'${s}'`).join(',')}]` : 'NULL';
+				const result = await executeQuery(
+					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources)
+					 VALUES ('${session_id}', '${agent_id}', '${finding.replace(/'/g, "''")}', '${confidence}', ${sources})
+					 RETURNING finding_id, created_at`,
+				);
+
+				const row = result.rows[0] as { finding_id: number; created_at: string };
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({
+								finding_id: row.finding_id,
 								session_id,
 								agent_id,
-								finding_id: 'placeholder-uuid',
 								stored: true,
-								timestamp: new Date().toISOString(),
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+								timestamp: row.created_at,
+							}),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: `Failed to store finding: ${(err as Error).message}` }),
+						},
+					],
+				};
+			}
 		},
 	);
 
 	/**
 	 * read_findings — Read all findings in the current session.
-	 *
-	 * The orchestrator calls this to see what domain agents have found.
-	 * Agents can also read each other's findings to avoid duplicate work.
-	 *
-	 * Returns findings filtered by session. Agents can only read findings
-	 * from the same session.
 	 */
 	server.tool(
 		'read_findings',
@@ -73,43 +86,42 @@ export function registerPersistTools(server: McpServer) {
 			agent_filter: z.string().optional().describe('Only return findings from this agent'),
 		},
 		async ({ session_id, agent_filter }) => {
-			// TODO: Wire to decision store — query findings by session_id
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
+			try {
+				const filter = agent_filter ? `AND agent_id = '${agent_filter}'` : '';
+				const result = await executeQuery(
+					`SELECT finding_id, agent_id, finding, confidence, data_sources, created_at
+					 FROM decision_findings
+					 WHERE session_id = '${session_id}' ${filter}
+					 ORDER BY created_at ASC`,
+				);
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({
 								session_id,
-								agent_filter,
-								findings: [
-									{
-										finding_id: 'placeholder',
-										agent_id: 'placeholder',
-										finding: 'placeholder: agent finding content',
-										confidence: 'high',
-										timestamp: 'placeholder',
-									},
-								],
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+								findings: result.rows,
+								total: result.rowCount,
+							}),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: `Failed to read findings: ${(err as Error).message}` }),
+						},
+					],
+				};
+			}
 		},
 	);
 
 	/**
 	 * log_decision — Record the final decision with full reasoning chain.
-	 *
-	 * Called by the orchestrator after combining all agent findings.
-	 * The decision becomes searchable precedent for future sessions.
-	 *
-	 * Includes: question, agents involved, each agent's finding, final
-	 * decision, confidence score, cost, and reasoning.
 	 */
 	server.tool(
 		'log_decision',
@@ -124,39 +136,53 @@ export function registerPersistTools(server: McpServer) {
 			cost_usd: z.number().optional().describe('Total LLM cost for this decision'),
 		},
 		async ({ session_id, question, decision, reasoning, confidence, agents_involved, cost_usd }) => {
-			// TODO: Wire to decision store — insert decision with full trace
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								decision_id: 'placeholder-uuid',
+			try {
+				// Update session with the question
+				await executeQuery(
+					`UPDATE decision_sessions SET question = '${question.replace(/'/g, "''")}', status = 'completed'
+					 WHERE session_id = '${session_id}'`,
+				);
+
+				// Insert decision
+				const agents = `ARRAY[${agents_involved.map((a) => `'${a}'`).join(',')}]`;
+				const cost = cost_usd ?? 0;
+				const result = await executeQuery(
+					`INSERT INTO decision_log (session_id, question, decision, reasoning, confidence, agents_involved, cost_usd)
+					 VALUES ('${session_id}', '${question.replace(/'/g, "''")}', '${decision.replace(/'/g, "''")}',
+					         '${reasoning.replace(/'/g, "''")}', '${confidence}', ${agents}, ${cost})
+					 RETURNING decision_id, created_at`,
+				);
+
+				const row = result.rows[0] as { decision_id: number; created_at: string };
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({
+								decision_id: row.decision_id,
 								session_id,
-								question,
-								decision,
-								confidence,
-								agents_involved,
-								cost_usd,
 								stored: true,
-								timestamp: new Date().toISOString(),
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+								timestamp: row.created_at,
+							}),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: `Failed to log decision: ${(err as Error).message}` }),
+						},
+					],
+				};
+			}
 		},
 	);
 
 	/**
 	 * save_memory — Persist agent memory across sessions.
-	 *
-	 * Agents can save learnings that persist beyond the current session.
-	 * Example: "Delays at CDG on Fridays average 45 minutes due to
-	 * congestion" — learned from analyzing delay patterns.
 	 */
 	server.tool(
 		'save_memory',
@@ -167,32 +193,36 @@ export function registerPersistTools(server: McpServer) {
 			content: z.string().describe('Memory content to persist'),
 		},
 		async ({ agent_id, key, content }) => {
-			// TODO: Wire to decision store — upsert agent memory
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								agent_id,
-								key,
-								saved: true,
-								timestamp: new Date().toISOString(),
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+			try {
+				await executeQuery(
+					`INSERT INTO agent_memory (agent_id, key, content)
+					 VALUES ('${agent_id}', '${key.replace(/'/g, "''")}', '${content.replace(/'/g, "''")}')
+					 ON CONFLICT (agent_id, key) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
+				);
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ agent_id, key, saved: true, timestamp: new Date().toISOString() }),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: `Failed to save memory: ${(err as Error).message}` }),
+						},
+					],
+				};
+			}
 		},
 	);
 
 	/**
 	 * recall_memory — Retrieve past agent memory.
-	 *
-	 * Agents recall learnings from previous sessions.
 	 */
 	server.tool(
 		'recall_memory',
@@ -202,30 +232,36 @@ export function registerPersistTools(server: McpServer) {
 			key: z.string().optional().describe('Specific memory key, or omit for all'),
 		},
 		async ({ agent_id, key }) => {
-			// TODO: Wire to decision store — query agent memory
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
+			try {
+				const filter = key ? `AND key = '${key.replace(/'/g, "''")}'` : '';
+				const result = await executeQuery(
+					`SELECT key, content, updated_at FROM agent_memory
+					 WHERE agent_id = '${agent_id}' ${filter}
+					 ORDER BY updated_at DESC`,
+				);
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({
 								agent_id,
-								key,
-								memories: [
-									{
-										key: 'placeholder',
-										content: 'placeholder: previously saved memory',
-										saved_at: 'placeholder',
-									},
-								],
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
+								memories: result.rows,
+								total: result.rowCount,
+							}),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ error: `Failed to recall memory: ${(err as Error).message}` }),
+						},
+					],
+				};
+			}
 		},
 	);
 }
