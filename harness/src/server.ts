@@ -26,7 +26,7 @@ import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
 import { registerContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
-import { registerActionTools } from './tools/action.js';
+import { registerActionTools, initActionTools } from './tools/action.js';
 import { registerEventTools } from './tools/event.js';
 import { registerPersistTools } from './tools/persist.js';
 import { registerVerifyTools } from './tools/verify.js';
@@ -79,9 +79,10 @@ async function main() {
 			console.error('[harness] Catalog: not configured (using YAML only)');
 		}
 
-		// Initialize governance and control engines
+		// Initialize governance, control, and action engines
 		initGovernance(scenarioPath);
 		initControlTools(scenarioPath);
+		initActionTools(scenarioPath);
 		const agents = loader.agents;
 		const agentNames = Object.keys(agents.agents);
 		console.error(`[harness] Agents: ${agentNames.join(', ')}`);

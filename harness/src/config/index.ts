@@ -46,8 +46,15 @@ export interface AgentConfig {
 	system_prompt?: string;
 }
 
+export interface AgentPermissions {
+	can_propose: string[];
+	can_approve: string[];
+	can_execute: string[];
+}
+
 export interface AgentsConfig {
 	agents: Record<string, AgentConfig>;
+	permissions?: Record<string, AgentPermissions>;
 	inter_agent: {
 		data_sharing: string;
 		pii_in_findings: string;
@@ -114,6 +121,18 @@ export interface PolicyConfig {
 		max_query_execution_time_seconds: number;
 	};
 	freshness: Record<string, { max_delay_minutes?: number; max_delay_hours?: number; description: string }>;
+	actions?: {
+		risk_classification: Record<string, string>;
+		approval_requirements: Record<string, string>;
+		progressive_autonomy?: {
+			enabled: boolean;
+			low_auto_after_decisions: number;
+			medium_auto_after_decisions: number;
+			high_auto_after_decisions: number;
+			critical_auto_after_decisions: number;
+			max_error_rate_for_promotion: number;
+		};
+	};
 }
 
 export interface BusinessRule {

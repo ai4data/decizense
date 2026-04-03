@@ -59,3 +59,28 @@ freshness:
     customers:
         max_delay_hours: 24
         description: Customer profiles are relatively static
+
+# Layer 5: Action/Permission
+actions:
+    risk_classification:
+        notify_customer: low
+        send_warning: medium
+        rebook_passenger: high
+        issue_compensation: high
+        cancel_flight: critical
+        override_policy: critical
+        escalate_to_human: low
+
+    approval_requirements:
+        low: auto
+        medium: auto # starts as auto, can be changed to human
+        high: human_required
+        critical: senior_required
+
+    progressive_autonomy:
+        enabled: true
+        low_auto_after_decisions: 0 # auto from the start
+        medium_auto_after_decisions: 50 # auto after 50 successful low-risk
+        high_auto_after_decisions: -1 # never auto (always human)
+        critical_auto_after_decisions: -1 # never auto (always senior)
+        max_error_rate_for_promotion: 0.02 # 2% error rate threshold

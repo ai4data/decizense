@@ -69,3 +69,30 @@ inter_agent:
     max_agents_per_session: 4
     max_llm_calls_per_agent: 10
     cost_limit_per_decision: 0.50 # USD
+
+# Layer 5: Permissions per agent
+permissions:
+    orchestrator:
+        can_propose: [low, medium, high, critical]
+        can_approve: [low, medium] # can auto-approve low/medium
+        can_execute: [] # orchestrator doesn't execute
+    flight_ops:
+        can_propose: [low, medium, high]
+        can_approve: [low] # can only auto-approve low risk
+        can_execute: [low] # can execute low risk actions
+    booking:
+        can_propose: [low, medium, high]
+        can_approve: [low]
+        can_execute: [low, medium] # booking agent can execute rebookings after approval
+    customer_service:
+        can_propose: [low, medium]
+        can_approve: [low]
+        can_execute: [low]
+    human_operator:
+        can_propose: [low, medium, high, critical]
+        can_approve: [low, medium, high]
+        can_execute: [low, medium, high]
+    senior_operator:
+        can_propose: [low, medium, high, critical]
+        can_approve: [low, medium, high, critical]
+        can_execute: [low, medium, high, critical]
