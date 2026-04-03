@@ -24,7 +24,7 @@ import { ScenarioLoader } from './config/index.js';
 import { initCatalog } from './catalog/index.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
-import { registerContextTools } from './tools/context.js';
+import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
 import { registerEventTools } from './tools/event.js';
@@ -81,6 +81,7 @@ async function main() {
 
 		// Initialize all engines
 		initGovernance(scenarioPath);
+		initContextTools(scenarioPath);
 		initControlTools(scenarioPath);
 		initActionTools(scenarioPath);
 		initPersistTools(scenarioPath);

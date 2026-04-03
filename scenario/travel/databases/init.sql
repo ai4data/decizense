@@ -116,6 +116,95 @@ CREATE TABLE events (
     metadata JSONB DEFAULT '{}'
 );
 
+-- =========================================================================
+-- Layer 4: Decision/Provenance
+-- =========================================================================
+
+CREATE TABLE decision_proposals (
+    proposal_id SERIAL PRIMARY KEY,
+    session_id VARCHAR(100) NOT NULL,
+    agent_id VARCHAR(50) NOT NULL,
+    proposed_action TEXT NOT NULL,
+    confidence VARCHAR(10) NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+    risk_class VARCHAR(10) NOT NULL DEFAULT 'low' CHECK (risk_class IN ('low', 'medium', 'high', 'critical')),
+    evidence_event_ids INTEGER[],
+    evidence_signal_types TEXT[],
+    evidence_rules TEXT[],
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'executed', 'completed')),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE decision_approvals (
+    approval_id SERIAL PRIMARY KEY,
+    proposal_id INTEGER NOT NULL REFERENCES decision_proposals(proposal_id),
+    approved_by VARCHAR(100) NOT NULL,
+    approved BOOLEAN NOT NULL,
+    reason TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE decision_actions (
+    action_id SERIAL PRIMARY KEY,
+    proposal_id INTEGER NOT NULL REFERENCES decision_proposals(proposal_id),
+    action_type VARCHAR(50) NOT NULL,
+    parameters JSONB NOT NULL DEFAULT '{}',
+    result TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'executing', 'completed', 'failed')),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE decision_outcomes (
+    outcome_id SERIAL PRIMARY KEY,
+    proposal_id INTEGER,
+    session_id VARCHAR(100) NOT NULL,
+    question TEXT NOT NULL,
+    decision_summary TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    confidence VARCHAR(10) NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+    agents_involved TEXT[] NOT NULL,
+    cost_usd DECIMAL(10, 4),
+    evidence_event_ids INTEGER[],
+    evidence_rules TEXT[],
+    evidence_signal_types TEXT[],
+    evidence_proposal_ids INTEGER[],
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE decision_findings (
+    finding_id SERIAL PRIMARY KEY,
+    session_id VARCHAR(100) NOT NULL,
+    agent_id VARCHAR(50) NOT NULL,
+    finding TEXT NOT NULL,
+    confidence VARCHAR(10) NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+    data_sources TEXT[],
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE agent_memory (
+    memory_id SERIAL PRIMARY KEY,
+    agent_id VARCHAR(50) NOT NULL,
+    key VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (agent_id, key)
+);
+
+-- Layer 5: Progressive autonomy tracking
+CREATE TABLE autonomy_stats (
+    risk_class VARCHAR(10) PRIMARY KEY,
+    total_decisions INTEGER NOT NULL DEFAULT 0,
+    successful_decisions INTEGER NOT NULL DEFAULT 0,
+    failed_decisions INTEGER NOT NULL DEFAULT 0,
+    auto_approved BOOLEAN NOT NULL DEFAULT false,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO autonomy_stats (risk_class, auto_approved) VALUES
+    ('low', true), ('medium', false), ('high', false), ('critical', false);
+
+-- =========================================================================
 -- Indexes for common queries
 CREATE INDEX idx_flights_status ON flights(status);
 CREATE INDEX idx_flights_departure ON flights(scheduled_departure);
@@ -129,3 +218,10 @@ CREATE INDEX idx_delays_flight ON flight_delays(flight_id);
 CREATE INDEX idx_events_type ON events(event_type);
 CREATE INDEX idx_events_booking ON events(booking_id);
 CREATE INDEX idx_events_timestamp ON events(timestamp);
+CREATE INDEX idx_proposals_session ON decision_proposals(session_id);
+CREATE INDEX idx_proposals_status ON decision_proposals(status);
+CREATE INDEX idx_approvals_proposal ON decision_approvals(proposal_id);
+CREATE INDEX idx_actions_proposal ON decision_actions(proposal_id);
+CREATE INDEX idx_outcomes_session ON decision_outcomes(session_id);
+CREATE INDEX idx_findings_session ON decision_findings(session_id);
+CREATE INDEX idx_memory_agent ON agent_memory(agent_id);

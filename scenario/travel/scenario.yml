@@ -17,3 +17,4 @@ catalog:
     provider: openmetadata
     url: "{{ env('CATALOG_URL', 'http://localhost:8585') }}"
     token: "{{ env('CATALOG_TOKEN') }}"
+    service_name: travel_postgres

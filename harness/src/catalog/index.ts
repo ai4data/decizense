@@ -61,7 +61,7 @@ export function initCatalog(scenarioPath: string): ICatalogClient | null {
 		catalogClient = factory({
 			url: catalog.url,
 			token: catalog.token,
-			serviceName: 'travel_postgres', // TODO: read from scenario config
+			serviceName: catalog.service_name ?? scenario.name ?? 'default',
 		});
 
 		console.error(`[catalog] Provider: ${provider}`);

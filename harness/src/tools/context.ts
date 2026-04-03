@@ -11,6 +11,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getCatalogClient } from '../catalog/index.js';
 import { executeQuery } from '../database/index.js';
+import { ScenarioLoader } from '../config/index.js';
+
+let loader: ScenarioLoader | null = null;
+
+export function initContextTools(scenarioPath: string) {
+	loader = new ScenarioLoader(scenarioPath);
+}
 
 export function registerContextTools(server: McpServer) {
 	/**
@@ -341,13 +348,40 @@ export function registerContextTools(server: McpServer) {
 			rule_name: z.string().describe('Name of the rule to get rationale for'),
 		},
 		async ({ rule_name }) => {
-			// This stays in YAML — OMD doesn't model enforcement rules with rationale
-			// TODO: Wire to ScenarioLoader.businessRules
+			if (!loader) {
+				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
+			}
+
+			const allRules = loader.businessRules;
+			const rule = allRules.find((r) => r.name === rule_name);
+
+			if (!rule) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({ rule_name, error: `Rule '${rule_name}' not found` }, null, 2),
+						},
+					],
+				};
+			}
+
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: JSON.stringify({ _scaffold: true, rule_name, rationale: null }, null, 2),
+						text: JSON.stringify(
+							{
+								rule_name: rule.name,
+								category: rule.category,
+								severity: rule.severity,
+								description: rule.description,
+								guidance: rule.guidance,
+								rationale: rule.rationale ?? null,
+							},
+							null,
+							2,
+						),
 					},
 				],
 			};

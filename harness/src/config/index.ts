@@ -33,6 +33,7 @@ export interface CatalogConfig {
 	provider: string;
 	url: string;
 	token?: string;
+	service_name?: string;
 }
 
 export interface AgentConfig {

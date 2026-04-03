@@ -246,6 +246,43 @@ export async function evaluateGovernance(params: {
 			}
 		}
 
+		// ── 5b. Join allowlist check ──
+		if (identity.bundle && parsed) {
+			try {
+				const bundle = loader.getBundle(identity.bundle);
+				const joinPattern = /JOIN\s+\S+\s+\S*\s*ON\s+(\S+)\s*=\s*(\S+)/gi;
+				let joinMatch;
+				while ((joinMatch = joinPattern.exec(params.sql)) !== null) {
+					const leftCol = joinMatch[1].toLowerCase().replace(/\w+\./, '');
+					const rightCol = joinMatch[2].toLowerCase().replace(/\w+\./, '');
+					const allowedJoins = (bundle.joins ?? []).map(
+						(j) => `${j.left.column.toLowerCase()}=${j.right.column.toLowerCase()}`,
+					);
+					const joinKey = `${leftCol}=${rightCol}`;
+					const reverseKey = `${rightCol}=${leftCol}`;
+					if (!allowedJoins.includes(joinKey) && !allowedJoins.includes(reverseKey)) {
+						checks.push({
+							name: 'join_allowlist',
+							passed: false,
+							detail: `Join ${joinMatch[1]} = ${joinMatch[2]} not in bundle allowlist`,
+						});
+					}
+				}
+			} catch {
+				/* bundle not found — already caught above */
+			}
+		}
+
+		// ── 5c. Execution permission check ──
+		if (!policy.execution.allow_execute_sql) {
+			checks.push({ name: 'execution_permission', passed: false, detail: 'SQL execution disabled by policy' });
+			return {
+				allowed: false,
+				reason: 'SQL execution is disabled by policy (execution.allow_execute_sql = false)',
+				checks,
+			};
+		}
+
 		// ── 6. PII column check (catalog-first, fallback to YAML) ──
 		let piiColumns: Set<string>;
 		const catalog = getCatalogClient();

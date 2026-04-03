@@ -108,7 +108,7 @@ export function registerControlTools(server: McpServer) {
 			// ── Tools available based on role ──
 			const toolsAvailable = agentConfig.can_query
 				? ['query_data', 'query_metrics', 'get_business_rules', 'write_finding', 'read_findings']
-				: ['get_context', 'read_findings', 'log_decision', 'get_business_rules'];
+				: ['get_context', 'read_findings', 'record_outcome', 'get_business_rules'];
 
 			if (agentConfig.role === 'orchestrator') {
 				toolsAvailable.push('get_confidence', 'verify_result');
