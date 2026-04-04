@@ -518,6 +518,35 @@ export function registerPersistTools(server: McpServer) {
 					);
 				}
 
+				// Auto-capture episodic memory from outcome
+				try {
+					await executeQuery(
+						`INSERT INTO memory_entries (memory_type, scope_type, scope_id, status, title, summary, content,
+						   confidence, source_outcome_id, evidence_event_ids, evidence_rules, evidence_signal_types)
+						 VALUES ('episodic', 'bundle', $1, 'candidate', $2, $3, $4::jsonb, $5,
+						         $6, $7::integer[], $8::text[], $9::text[])`,
+						[
+							session_id,
+							question.substring(0, 200),
+							safeSummary,
+							JSON.stringify({
+								question,
+								decision: safeSummary,
+								reasoning: safeReasoning,
+								agents: agents_involved,
+								session_id,
+							}),
+							confidence === 'high' ? 0.9 : confidence === 'medium' ? 0.6 : 0.3,
+							row.outcome_id,
+							evidence_event_ids ?? null,
+							evidence_rules ?? null,
+							evidence_signal_types ?? null,
+						],
+					);
+				} catch {
+					// Non-critical: don't fail the outcome if memory capture fails
+				}
+
 				return {
 					content: [
 						{
@@ -526,6 +555,7 @@ export function registerPersistTools(server: McpServer) {
 								outcome_id: row.outcome_id,
 								session_id,
 								stored: true,
+								memory_captured: true,
 								timestamp: row.created_at,
 							}),
 						},
@@ -558,6 +588,16 @@ export function registerPersistTools(server: McpServer) {
 					 ON CONFLICT (agent_id, key) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
 					[agent_id, key, safeContent],
 				);
+				// Also write to memory_entries as semantic candidate
+				try {
+					await executeQuery(
+						`INSERT INTO memory_entries (memory_type, scope_type, scope_id, status, title, summary, content, confidence)
+						 VALUES ('semantic', 'agent', $1, 'candidate', $2, $3, $4::jsonb, 0.5)`,
+						[agent_id, key, safeContent, JSON.stringify({ key, content: safeContent, agent_id })],
+					);
+				} catch {
+					// Non-critical
+				}
 				return {
 					content: [
 						{
@@ -576,30 +616,86 @@ export function registerPersistTools(server: McpServer) {
 
 	server.tool(
 		'recall_memory',
-		'Retrieve agent memory from previous sessions',
+		'Retrieve memories — legacy KV + structured memory_entries with scope filtering',
 		{
 			agent_id: z.string().describe('Agent recalling memory'),
-			key: z.string().optional().describe('Specific memory key, or omit for all'),
+			key: z.string().optional().describe('Specific key for legacy memory, or keyword for structured search'),
+			scope: z
+				.enum(['agent', 'bundle', 'global', 'all'])
+				.optional()
+				.default('all')
+				.describe('Scope filter for structured memories'),
 		},
-		async ({ agent_id, key }) => {
+		async ({ agent_id, key, scope }) => {
 			try {
-				let sql: string;
-				let params: unknown[];
+				// Legacy KV memory
+				let legacySql: string;
+				let legacyParams: unknown[];
 				if (key) {
-					sql = `SELECT key, content, updated_at FROM agent_memory
-					       WHERE agent_id = $1 AND key = $2 ORDER BY updated_at DESC`;
-					params = [agent_id, key];
+					legacySql = `SELECT key, content, updated_at FROM agent_memory
+					             WHERE agent_id = $1 AND key = $2 ORDER BY updated_at DESC`;
+					legacyParams = [agent_id, key];
 				} else {
-					sql = `SELECT key, content, updated_at FROM agent_memory
-					       WHERE agent_id = $1 ORDER BY updated_at DESC`;
-					params = [agent_id];
+					legacySql = `SELECT key, content, updated_at FROM agent_memory
+					             WHERE agent_id = $1 ORDER BY updated_at DESC`;
+					legacyParams = [agent_id];
 				}
-				const result = await executeQuery(sql, params);
+				const legacyResult = await executeQuery(legacySql, legacyParams);
+
+				// Structured memory_entries — scope-aware
+				const scopeConditions: string[] = [];
+				const structuredParams: unknown[] = [];
+				let paramIdx = 0;
+
+				if (scope === 'agent' || scope === 'all') {
+					paramIdx++;
+					structuredParams.push(agent_id);
+					scopeConditions.push(`(scope_type = 'agent' AND scope_id = $${paramIdx})`);
+				}
+				if (scope === 'bundle' || scope === 'all') {
+					// Get agent's bundle from config
+					const agentBundle = loader?.agents?.agents?.[agent_id]?.bundle;
+					if (agentBundle) {
+						paramIdx++;
+						structuredParams.push(agentBundle);
+						scopeConditions.push(`(scope_type = 'bundle' AND scope_id = $${paramIdx})`);
+					}
+				}
+				if (scope === 'global' || scope === 'all') {
+					scopeConditions.push(`scope_type = 'global'`);
+				}
+
+				const scopeWhere = scopeConditions.length > 0 ? `AND (${scopeConditions.join(' OR ')})` : '';
+
+				// Search by keyword if key provided
+				let keyFilter = '';
+				if (key) {
+					paramIdx++;
+					structuredParams.push(`%${key}%`);
+					keyFilter = `AND (LOWER(title) LIKE LOWER($${paramIdx}) OR LOWER(summary) LIKE LOWER($${paramIdx}))`;
+				}
+
+				const structuredResult = await executeQuery(
+					`SELECT memory_id, memory_type, scope_type, scope_id, status, title, summary,
+					        confidence, created_at, valid_from, valid_to, source_outcome_id,
+					        evidence_rules, evidence_signal_types
+					 FROM memory_entries
+					 WHERE status IN ('candidate', 'active') ${scopeWhere} ${keyFilter}
+					 ORDER BY confidence DESC, created_at DESC
+					 LIMIT 20`,
+					structuredParams,
+				);
+
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: JSON.stringify({ agent_id, memories: result.rows, total: result.rowCount }),
+							text: JSON.stringify({
+								agent_id,
+								legacy_memories: legacyResult.rows,
+								structured_memories: structuredResult.rows,
+								total: (legacyResult.rowCount ?? 0) + (structuredResult.rowCount ?? 0),
+							}),
 						},
 					],
 				};

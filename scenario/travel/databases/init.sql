@@ -191,6 +191,29 @@ CREATE TABLE agent_memory (
     UNIQUE (agent_id, key)
 );
 
+-- Layer 4b: Structured memory (three-tier: episodic, semantic, procedural)
+CREATE TABLE memory_entries (
+    memory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_type VARCHAR(20) NOT NULL CHECK (memory_type IN ('episodic', 'semantic', 'procedural')),
+    scope_type VARCHAR(10) NOT NULL CHECK (scope_type IN ('agent', 'bundle', 'global')),
+    scope_id VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate', 'active', 'stale', 'superseded', 'retracted')),
+    title VARCHAR(200) NOT NULL,
+    summary TEXT NOT NULL,
+    content JSONB NOT NULL DEFAULT '{}',
+    confidence DECIMAL(3,2) NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    valid_from TIMESTAMP NOT NULL DEFAULT NOW(),
+    valid_to TIMESTAMP,
+    expires_at TIMESTAMP,
+    last_revalidated_at TIMESTAMP,
+    source_outcome_id INTEGER,
+    source_proposal_id INTEGER,
+    evidence_event_ids INTEGER[],
+    evidence_rules TEXT[],
+    evidence_signal_types TEXT[]
+);
+
 -- Layer 5: Progressive autonomy tracking
 CREATE TABLE autonomy_stats (
     risk_class VARCHAR(10) PRIMARY KEY,
@@ -225,3 +248,7 @@ CREATE INDEX idx_actions_proposal ON decision_actions(proposal_id);
 CREATE INDEX idx_outcomes_session ON decision_outcomes(session_id);
 CREATE INDEX idx_findings_session ON decision_findings(session_id);
 CREATE INDEX idx_memory_agent ON agent_memory(agent_id);
+CREATE INDEX idx_mem_entries_type ON memory_entries(memory_type);
+CREATE INDEX idx_mem_entries_scope ON memory_entries(scope_type, scope_id);
+CREATE INDEX idx_mem_entries_status ON memory_entries(status);
+CREATE INDEX idx_mem_entries_confidence ON memory_entries(confidence DESC);
