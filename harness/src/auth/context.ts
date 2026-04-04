@@ -7,9 +7,20 @@
  * The token never appears in tool schemas — the model cannot see or leak it.
  */
 
-import { createHash } from 'crypto';
 import type { ScenarioLoader } from '../config/index.js';
 import { createVerifier, tokenHash, type VerifyConfig } from './verify.js';
+
+/**
+ * Typed error for authentication failures.
+ * Callers (server.ts) use instanceof AuthError to distinguish fatal auth
+ * errors from recoverable config errors — no brittle string matching.
+ */
+export class AuthError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'AuthError';
+	}
+}
 
 export interface AuthContext {
 	// Identity
@@ -67,7 +78,7 @@ async function resolveJwtContext(
 ): Promise<AuthContext> {
 	const token = process.env.AGENT_TOKEN;
 	if (!token) {
-		throw new Error('AUTH_MODE=jwt but AGENT_TOKEN environment variable is not set');
+		throw new AuthError('AUTH_MODE=jwt but AGENT_TOKEN environment variable is not set');
 	}
 
 	const verifyConfig: VerifyConfig = {
@@ -82,17 +93,17 @@ async function resolveJwtContext(
 	const result = await verifier.verify(token, authConfig.audience ?? 'dazense-harness');
 
 	if (!result.valid) {
-		throw new Error(`Agent token verification failed: ${result.error}`);
+		throw new AuthError(`Agent token verification failed: ${result.error}`);
 	}
 
 	if (!result.sub) {
-		throw new Error('Agent token missing sub claim — cannot determine agent identity');
+		throw new AuthError('Agent token missing sub claim — cannot determine agent identity');
 	}
 
 	// Map sub claim (catalog_bot name) → agent_id
 	const agentId = resolveAgentIdFromSubject(loader, result.sub);
 	if (!agentId) {
-		throw new Error(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
+		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
 	}
 
 	return {
@@ -127,7 +138,7 @@ function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): 
 	// Verify agent exists in config
 	const agents = loader.agents;
 	if (!agents.agents[agentId]) {
-		throw new Error(`AGENT_ID="${agentId}" not found in agents.yml`);
+		throw new AuthError(`AGENT_ID="${agentId}" not found in agents.yml`);
 	}
 
 	return {

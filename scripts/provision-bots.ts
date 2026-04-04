@@ -153,7 +153,8 @@ async function main() {
 		const result = await createBot(baseUrl, adminToken, catalog_bot);
 		if (result.token) {
 			envLines.push(`${token_env}=${result.token}`);
-			console.error(`  Token: ${result.token.substring(0, 20)}... → ${token_env}\n`);
+			// Never log token material — only confirm success + destination env var
+			console.error(`  Token: obtained (${result.token.length} chars) → ${token_env}\n`);
 		} else {
 			envLines.push(`# ${token_env}= (failed to provision)`);
 			console.error(`  Token: FAILED\n`);

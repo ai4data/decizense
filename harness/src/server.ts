@@ -24,7 +24,7 @@ import { ScenarioLoader } from './config/index.js';
 import { initCatalog } from './catalog/index.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
-import { resolveAuthContext } from './auth/context.js';
+import { resolveAuthContext, AuthError } from './auth/context.js';
 import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
@@ -105,13 +105,12 @@ async function main() {
 		const piiCount = Object.values(policy.pii.columns).flat().length;
 		console.error(`[harness] Policy: ${piiCount} PII columns blocked, max ${policy.defaults.max_rows} rows`);
 	} catch (err) {
-		const message = (err as Error).message;
 		// Auth errors are fatal — never fall through to scaffold mode
-		if (message.includes('token') || message.includes('AGENT_TOKEN') || message.includes('Auth')) {
-			console.error(`[harness] FATAL: ${message}`);
+		if (err instanceof AuthError) {
+			console.error(`[harness] FATAL: ${err.message}`);
 			process.exit(1);
 		}
-		console.error(`[harness] Warning: Could not load scenario config: ${message}`);
+		console.error(`[harness] Warning: Could not load scenario config: ${(err as Error).message}`);
 		console.error(`[harness] Running with scaffold responses only`);
 	}
 

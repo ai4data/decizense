@@ -179,7 +179,8 @@ export function registerActionTools(server: McpServer) {
 			evidence_rules: z.array(z.string()).optional().describe('Evidence: business rules'),
 		},
 		async ({ action_type, parameters, reason, session_id, evidence_event_ids, evidence_rules }) => {
-			const agent_id = getAuthContext().agentId;
+			const ctx = getAuthContext();
+			const agent_id = ctx.agentId;
 			if (!loader) {
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],
@@ -236,10 +237,10 @@ export function registerActionTools(server: McpServer) {
 
 				const proposalResult = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
-					   evidence_event_ids, evidence_rules, status)
+					   evidence_event_ids, evidence_rules, status, auth_method, token_hash, correlation_id)
 					 VALUES ($1, $2, $3,
 					   'high', $4, $5, $6,
-					   $7)
+					   $7, $8, $9, $10)
 					 RETURNING proposal_id`,
 					[
 						sid,
@@ -249,6 +250,9 @@ export function registerActionTools(server: McpServer) {
 						eventIdsParam,
 						rulesParam,
 						autoApproved ? 'approved' : 'pending',
+						ctx.authMethod,
+						ctx.tokenHash,
+						ctx.sessionId,
 					],
 				);
 				const proposalId = (proposalResult.rows[0] as { proposal_id: number }).proposal_id;

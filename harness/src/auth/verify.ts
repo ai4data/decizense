@@ -108,7 +108,7 @@ export class IntrospectionVerifier implements VerifyStrategy {
 		private clientCredentials?: { clientId: string; clientSecret: string },
 	) {}
 
-	async verify(token: string, _expectedAudience?: string): Promise<VerifyResult> {
+	async verify(token: string, expectedAudience?: string): Promise<VerifyResult> {
 		try {
 			const headers: Record<string, string> = {
 				'Content-Type': 'application/x-www-form-urlencoded',
@@ -131,7 +131,7 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				active: boolean;
 				sub?: string;
 				iss?: string;
-				aud?: string;
+				aud?: string | string[];
 				exp?: number;
 			};
 
@@ -139,11 +139,28 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				return { valid: false, error: 'Token is not active' };
 			}
 
+			// Enforce expected audience (RFC 7662 introspection response includes aud)
+			if (expectedAudience) {
+				const audClaim = data.aud;
+				const audList = Array.isArray(audClaim) ? audClaim : audClaim ? [audClaim] : [];
+				if (!audList.includes(expectedAudience)) {
+					return {
+						valid: false,
+						error: `Token audience mismatch: expected "${expectedAudience}", got ${JSON.stringify(audClaim)}`,
+					};
+				}
+			}
+
+			// Check expiration (introspection may return exp)
+			if (data.exp && data.exp * 1000 < Date.now()) {
+				return { valid: false, error: 'Token is expired' };
+			}
+
 			return {
 				valid: true,
 				sub: data.sub,
 				iss: data.iss,
-				aud: data.aud,
+				aud: Array.isArray(data.aud) ? data.aud[0] : data.aud,
 				exp: data.exp,
 			};
 		} catch (err) {
