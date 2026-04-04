@@ -54,11 +54,20 @@ docker compose up -d
 ### 2. Install dependencies
 
 ```bash
+# Root (UI backend + frontend)
+npm install
+
 # Harness
-cd harness && npm install
+cd harness && npm install && cd ..
 
 # Agents (examples)
-cd agents && npm install
+cd agents && npm install && cd ..
+```
+
+Or use the bootstrap script:
+
+```bash
+bash scripts/bootstrap-platform-deps.sh
 ```
 
 ### 3. Run the harness test
@@ -72,11 +81,18 @@ Expected: `✅ All tests passed!` — 31 tools discovered, governance enforced.
 
 ### 4. Run a domain agent
 
+Set your LLM credentials (Azure OpenAI example):
+
 ```bash
 export AZURE_OPENAI_API_KEY=<your-key>
 export AZURE_RESOURCE_NAME=<your-resource>
 export AZURE_OPENAI_CHAT_DEPLOYMENT=<your-deployment>
+```
 
+The agents use Azure OpenAI by default. To use a different LLM, edit `agents/src/llm.ts`.
+
+```bash
+cd agents
 npx tsx src/flight-ops.ts "What are the top delay reasons in March 2026?"
 ```
 

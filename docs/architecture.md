@@ -1,711 +1,321 @@
-# dazense Architecture
+# Agent Harness Architecture (v2)
 
-## Current Architecture
+## Overview
 
-### Overview
+The harness is an MCP server that sits between AI agents and enterprise data/systems. It provides governed context, enforces policies, manages decisions, and controls actions — across 5 canonical layers.
 
-dazense is a monorepo with three runtime components and a CLI:
+## Invariants
 
-```
-                    Browser
-                      |
-                      v
-              +---------------+
-              |   Frontend    |  React, TanStack, Shadcn
-              |  :3000 (dev)  |  Vite dev server
-              +-------+-------+
-                      |
-                      | tRPC + HTTP
-                      v
-              +---------------+
-              |   Backend     |  Fastify, tRPC, Drizzle, Vercel AI SDK
-              |    :5005      |  Bun runtime
-              +-------+-------+
-                      |
-          +-----------+-----------+
-          |                       |
-          v                       v
-  +---------------+       +---------------+
-  |   FastAPI     |       |   LLM API     |  Anthropic, OpenAI,
-  |    :8005      |       |  (external)   |  Mistral, Google,
-  |  Python tools |       +---------------+  OpenRouter
-  +-------+-------+
-          |
-          v
-  +---------------+
-  |   Database    |  DuckDB, PostgreSQL, BigQuery,
-  |  (user data)  |  Snowflake, Databricks, MSSQL
-  +---------------+
-```
+- Meaning before action
+- Policy before execution
+- Traceability by default
+- Replayability required
+- Human-gated autonomy progression
 
-### Component Details
+## Architecture Diagram
 
-#### CLI (`cli/`)
+```mermaid
+graph TB
+    subgraph "CATALOG PLATFORM — OpenMetadata + Jena Fuseki"
+        OMD_RDF[("RDF Knowledge Graph<br/>SPARQL endpoint")]
+        OMD_GLOSS["Glossary<br/>typed relationships<br/>business ontology"]
+        OMD_LIN["Lineage<br/>PROV-O triples<br/>pipeline dependencies"]
+        OMD_GOV["Classifications<br/>PII tags, ownership<br/>domains, tiers"]
+        OMD_MCP["MCP Server<br/>12 tools: search, lineage<br/>details, semantic search"]
+        OMD_RDF --- OMD_GLOSS
+        OMD_RDF --- OMD_LIN
+        OMD_RDF --- OMD_GOV
+        OMD_RDF --- OMD_MCP
+    end
 
-Python package (`dazense-core`) published to PyPI. Entry point: `dazense_core/main.py`.
+    subgraph "AGENT HARNESS — MCP Server"
 
-| Command         | What it does                                                                                                                       |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `dazense init`  | Scaffolds a project — prompts for databases, LLM provider, creates `dazense_config.yaml` and `RULES.md`                            |
-| `dazense sync`  | Connects to databases, generates schema markdown files under `databases/`, syncs git repos, Notion pages, renders Jinja2 templates |
-| `dazense chat`  | Launches the backend binary + FastAPI server, opens browser                                                                        |
-| `dazense debug` | Tests database and LLM connectivity                                                                                                |
-| `dazense test`  | Runs evaluation tests against YAML test cases                                                                                      |
+        subgraph "Layer 1+2: Context Graph — from Catalog"
+            CG[("Shared Memory Substrate")]
+            CG_SEM["Semantic Layer<br/>ontology, glossary, intents<br/>concept hierarchies IS_A"]
+            CG_GOV["Governance Layer<br/>PII blocking, bundle scope<br/>business rules + rationale"]
+            CG_RULES["Scenario Rules<br/>business rules + rationale<br/>freshness SLAs, intents<br/>(from scenario YAML)"]
+            OMD_GLOSS -->|"glossary, ontology<br/>typed relationships"| CG_SEM
+            OMD_GOV -->|"PII tags, ownership<br/>domains, tiers"| CG_GOV
+            OMD_LIN -->|"lineage<br/>PROV-O"| CG
+            CG_RULES -->|"rules + rationale"| CG_GOV
+            CG --- CG_SEM
+            CG --- CG_GOV
+        end
 
-**Key dependency:** Ibis Framework with adapters for DuckDB, PostgreSQL, BigQuery, Snowflake, Databricks, MSSQL.
+        subgraph "Layer 3: Operational/Event"
+            EVT["Event Ingestion<br/>append-only event log<br/>source of truth"]
+            PROJ["Projections<br/>case timelines<br/>process signals"]
+            PM["Process Intelligence<br/>bottleneck detection<br/>variant analysis"]
+            EVT --> PROJ --> PM
+        end
 
-**Sync output structure:**
+        subgraph "Layer 4: Decision/Provenance"
+            DP["Decision Proposal<br/>agent recommends action"]
+            DA["Decision Approval<br/>human or auto-approved<br/>by risk class"]
+            DAC["Decision Action<br/>executed after approval"]
+            DO["Decision Outcome<br/>result + evidence links"]
+            DP --> DA --> DAC --> DO
+            EVID["Evidence Links<br/>to events, process signals<br/>policy checks, rules"]
+            DO --- EVID
+        end
 
-```
-project/
-├── dazense_config.yaml
-├── RULES.md
-├── databases/
-│   └── type={db_type}/
-│       └── database={db_name}/
-│           └── schema={schema}/
-│               └── table={table}/
-│                   ├── columns.md       # Column names, types, nullable
-│                   ├── description.md   # Row count, metadata
-│                   └── preview.md       # Sample rows
-├── repos/                               # Cloned git repos
-├── docs/                                # Synced Notion pages, other docs
-├── agent/mcps/                          # MCP tool configs
-├── templates/                           # User Jinja2 templates
-└── tests/                               # Evaluation test cases
-```
+        subgraph "Layer 5: Action/Permission"
+            RISK["Risk Classification<br/>low: auto-approve<br/>medium: human review<br/>high: human required"]
+            PERM["Permission Model<br/>who can propose<br/>who can approve<br/>who can execute"]
+            SEP["Separation of Rights<br/>recommendation is not execution<br/>agents recommend<br/>humans decide high risk"]
+            RISK --- PERM --- SEP
+        end
 
-#### Backend (`apps/backend/`)
+        subgraph "Core Components"
+            ORCH["Orchestrator<br/>decomposes tasks<br/>routes to agents<br/>combines findings<br/>scores confidence"]
+            TOOL["Tool Registry<br/>query_data governed SQL<br/>query_metrics semantic<br/>execute_action approval gate<br/>get_context SPARQL"]
+            GOV_INT["Internal Governance<br/>10-point policy check<br/>SQL validation<br/>PII blocking<br/>bundle enforcement"]
+        end
 
-TypeScript, runs on Bun. Fastify HTTP server with tRPC for typed API.
+        subgraph "Domain Agents"
+            OPS["Flight Ops Agent<br/>bundle: flights-ops"]
+            BKG["Booking Agent<br/>bundle: bookings"]
+            CUST["Customer Agent<br/>bundle: customer-service"]
+        end
+    end
 
-**Layers:**
+    subgraph "Database — PostgreSQL"
+        DB_FLIGHTS[(flights, airports<br/>airlines, delays)]
+        DB_BOOK[(bookings, tickets<br/>payments, checkins)]
+        DB_CUST[(customers)]
+        DB_EVT[(events<br/>383K process<br/>mining records)]
+        DB_DEC[(decisions<br/>findings, memory)]
+    end
 
-```
-routes/          tRPC procedures + Fastify HTTP routes
-  |
-services/        Business logic (agent execution, Slack, email)
-  |
-queries/         Drizzle ORM database queries
-  |
-db/              Schema definitions (SQLite or PostgreSQL)
-```
+    subgraph "External Systems"
+        EXT_WEATHER["Weather API"]
+        EXT_NOTIF["Notification Service"]
+    end
 
-**Key files:**
+    OMD_MCP -->|"MCP + SPARQL<br/>runtime queries"| CG
 
-| File                               | Purpose                                                    |
-| ---------------------------------- | ---------------------------------------------------------- |
-| `src/index.ts`                     | Entry point, starts server on :5005                        |
-| `src/services/agent.service.ts`    | Core agent loop — builds messages, streams LLM responses   |
-| `src/components/system-prompt.tsx` | Builds the system prompt with project context              |
-| `src/agents/tools/index.ts`        | Registers all agent tools                                  |
-| `src/agents/tools/execute-sql.ts`  | SQL execution tool — calls FastAPI                         |
-| `src/agents/providers.ts`          | LLM provider configuration                                 |
-| `src/agents/user-rules.ts`         | Loads RULES.md and database connections into system prompt |
-| `src/trpc/router.ts`               | Root tRPC router                                           |
-| `src/auth.ts`                      | Better-Auth setup                                          |
+    CG --> ORCH
+    CG --> TOOL
+    CG --> GOV_INT
 
-**Agent execution flow:**
+    ORCH --> OPS
+    ORCH --> BKG
+    ORCH --> CUST
 
-```
-1. User sends message via tRPC (chat.routes.ts)
-2. AgentManager loads project context (agent.service.ts)
-3. System prompt built: fixed instructions + RULES.md + database connections (system-prompt.tsx)
-4. Messages sent to LLM via Vercel AI SDK (agent.service.ts)
-5. LLM calls tools (execute_sql, read, grep, list, search, display_chart, etc.)
-6. Tool results returned to LLM
-7. LLM generates final response
-8. Response streamed to frontend
-```
+    OPS -->|"query_data"| TOOL
+    BKG -->|"query_data"| TOOL
+    CUST -->|"query_data"| TOOL
+    TOOL -->|"governed"| GOV_INT
 
-**Tool context:** Every tool receives only `{ projectFolder: string }`. All context comes from files in that folder or from the system prompt.
+    GOV_INT --> DB_FLIGHTS
+    GOV_INT --> DB_BOOK
+    GOV_INT --> DB_CUST
 
-#### FastAPI Server (`apps/backend/fastapi/`)
+    DB_EVT --> EVT
+    PM -->|"signals"| DP
+    ORCH -->|"propose"| DP
+    DA -->|"check risk"| RISK
+    DAC --> DB_DEC
+    DO --> DB_DEC
+    EVID -->|"evidence"| DB_EVT
 
-Python, runs on uvicorn at :8005. Handles operations that need Python runtime.
-
-**Endpoints:**
-
-| Endpoint               | Purpose                                      |
-| ---------------------- | -------------------------------------------- |
-| `POST /execute_sql`    | Executes SQL against user databases via Ibis |
-| `POST /execute_python` | Runs Python code in sandbox                  |
-
-**SQL execution flow:**
-
-```
-1. Agent tool calls HTTP POST to localhost:8005/execute_sql
-2. FastAPI loads dazense_config.yaml from project folder
-3. Resolves which database to use (single DB or by database_id)
-4. Connects via Ibis (DuckDB, Postgres, BigQuery, etc.)
-5. Executes SQL, returns results as JSON
+    DAC -->|"notify"| EXT_NOTIF
+    OPS -->|"weather"| EXT_WEATHER
 ```
 
-#### Frontend (`apps/frontend/`)
+## The 5 Canonical Layers
 
-React 19, Vite, TanStack Router (file-based routing), TanStack Query, Shadcn UI.
+### Layer 1+2: Context Graph (from Catalog)
 
-**Key structure:**
+**Source**: OpenMetadata + Jena Fuseki RDF store
 
-```
-src/
-├── routes/              File-based routing (TanStack Router)
-├── components/
-│   ├── ui/              Shadcn components
-│   ├── tool-calls/      Tool execution result rendering
-│   └── (feature components)
-├── hooks/               React hooks
-├── contexts/            Theme, sidebar, analytics providers
-├── services/            API client logic
-├── queries/             React Query definitions
-└── lib/                 Utilities
-```
+The catalog platform is the source of truth for meaning and governance metadata. The harness reads from it via:
 
-**Communication:** tRPC client with HTTP batch link to backend.
+- **MCP Server** (12 tools) — search, lineage, entity details, semantic search
+- **SPARQL endpoint** — complex graph queries
+- **REST API** — simple lookups
 
-#### Database (internal)
+**Design principle: maximize what comes from OMD, minimize what stays in YAML.**
 
-Stores application state (not user data). Supports SQLite (default) or PostgreSQL.
+What comes from the catalog (OMD):
 
-**Key tables:** user, session, chat, chat_message, message_feedback, project, organization, saved_prompts.
+| Capability      | OMD feature                                 | RDF standard                             |
+| --------------- | ------------------------------------------- | ---------------------------------------- |
+| Entity types    | Tables, columns, dashboards, pipelines      | `om:Table`, `om:Column` classes          |
+| Lineage         | Pipeline dependencies, column-level lineage | `prov:wasDerivedFrom` (PROV-O)           |
+| Glossary        | Business terms with typed relationships     | Custom RDF predicates with cardinality   |
+| Classifications | PII, Sensitive, Tier tags                   | `om:classification` properties           |
+| Ownership       | Teams, domains, certification               | `om:owner`, `om:domain`                  |
+| Validation      | Schema constraints                          | SHACL shapes (`openmetadata-shapes.ttl`) |
+| Bundles         | Domains + Data Products → trust boundaries  | Domain containment, Data Product ports   |
+| Freshness SLAs  | Data quality tests + profiler freshness     | Quality test thresholds, last_modified   |
 
-**ORM:** Drizzle with separate schemas for SQLite and PostgreSQL.
+What stays in scenario YAML (OMD cannot express these):
 
----
+| Capability        | Why YAML                                                                     |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Business rules    | Enforcement logic with severity/guidance/rationale — OMD has no rules engine |
+| Intent mappings   | "This question maps to these measures" — harness-specific concept            |
+| Agent definitions | Agent identity, role, system prompt — runtime config                         |
+| Inter-agent rules | Data sharing rules, cost limits — harness-specific                           |
 
-## New Architecture (with Semantic Layer + Business Rules)
+### Layer 3: Operational/Event
 
-### Overview
+**Source**: PostgreSQL events table
 
-Two new components are added to the existing architecture. Both live in the FastAPI Python server, since they depend on Ibis (already there) and Python (already there).
-
-```
-                    Browser
-                      |
-                      v
-              +---------------+
-              |   Frontend    |
-              |  :3000 (dev)  |
-              +-------+-------+
-                      |
-                      v
-              +---------------+
-              |   Backend     |
-              |    :5005      |
-              +-------+-------+
-                      |
-          +-----------+-----------+------------------+
-          |                       |                  |
-          v                       v                  v
-  +---------------+       +---------------+  +---------------+
-  |   FastAPI     |       |   LLM API     |  |   App DB      |
-  |    :8005      |       |  (external)   |  | SQLite / PG   |
-  |               |       +---------------+  +---------------+
-  | /execute_sql  |
-  | /execute_py   |
-  | /query_metrics|  <-- NEW
-  | /business_ctx |  <-- NEW
-  +-------+-------+
-          |
-    +-----+-----+
-    |     |     |
-    v     v     v
-  +---+ +---+ +---+
-  |Ibis| |Sem| |Biz|
-  |    | |Lyr| |Rul|
-  +---+ +---+ +---+
-    |     |
-    v     v
-  +---------------+
-  |   Database    |
-  |  (user data)  |
-  +---------------+
-```
-
-### What changes
-
-#### 1. New module: Semantic Layer (`cli/dazense_core/semantic/`)
-
-A YAML-to-Ibis translator. Pure Python, no external dependencies beyond Ibis.
-
-**Files:**
+The event log is the append-only source of truth for what happened. Each booking is a process instance (`case_id = booking_id`).
 
 ```
-cli/dazense_core/semantic/
-├── __init__.py
-├── model.py          # Parse semantic_model.yml into Python objects
-├── compiler.py       # Translate metric queries into Ibis expressions
-└── validator.py      # Validate model against actual database schema
+Event Ingestion (append-only)
+    → Projections (case timelines per booking)
+    → Process Intelligence (bottlenecks, variants, signals)
 ```
 
-**Responsibilities:**
-
-- Parse `semantic_model.yml` from project folder
-- Validate measure/dimension references against database schema
-- Resolve joins between models
-- Compile `query(measures, dimensions, filters)` into Ibis expression
-- Let Ibis handle SQL dialect compilation
-
-**Data flow:**
+Event types in travel scenario:
 
 ```
-semantic_model.yml
-        |
-        v
-  +-----------+
-  | model.py  |  Parse YAML into SemanticModel objects
-  +-----------+
-        |
-        v
-  +-------------+
-  | compiler.py |  Resolve joins, build Ibis aggregation
-  +-------------+
-        |
-        v
-  +-------------+
-  |    Ibis     |  Compile to target SQL dialect
-  +-------------+
-        |
-        v
-  +-------------+
-  |  Database   |  Execute query, return results
-  +-------------+
+CustomerRegistered → FlightSearched → FlightSelected → BookingCreated
+→ PaymentSucceeded/PaymentFailed → TicketIssued → CheckInCompleted
+→ BoardingStarted → FlightDeparted → FlightArrived
+→ FlightDelayed → FlightCancelled → RebookingInitiated → CompensationIssued
 ```
 
-**SemanticModel structure:**
+Process intelligence outputs become **signals** that feed decision proposals:
 
-```python
-@dataclass
-class Measure:
-    name: str
-    expression: str        # e.g., "_.amount.sum()"
+- "87% of delays at CDG on Fridays exceed 45 minutes"
+- "Payments via wallet have 3x higher failure rate"
+- "Average time from BookingCreated to CheckInCompleted: 12 days"
 
-@dataclass
-class Dimension:
-    name: str
-    expression: str        # e.g., "_.status"
+### Layer 4: Decision/Provenance
 
-@dataclass
-class Join:
-    model: str             # target model name
-    type: str              # "one" or "many"
-    on: str                # e.g., "_.customer_id"
+**Source**: PostgreSQL (decision_proposals, decision_approvals, decision_actions, decision_outcomes, decision_findings, agent_memory)
 
-@dataclass
-class Model:
-    name: str
-    table: str
-    primary_key: str | None
-    time_dimension: str | None
-    measures: dict[str, Measure]
-    dimensions: dict[str, Dimension]
-    joins: dict[str, Join]
-
-@dataclass
-class SemanticModel:
-    models: dict[str, Model]
-```
-
-#### 2. New module: Business Rules (`cli/dazense_core/rules/`)
-
-A YAML-based business rules engine. Pure Python, no rdflib.
-
-**Files:**
+Every significant agent action follows a lifecycle with evidence links:
 
 ```
-cli/dazense_core/rules/
-├── __init__.py
-├── loader.py         # Parse business_rules.yml
-└── engine.py         # Match rules to concepts, return relevant context
+propose_decision
+    agent_id: "flight_ops"
+    proposed_action: "connection safe, no rebooking needed"
+    evidence_event_ids: [766218]           ← links to Layer 3 events
+    evidence_signal_types: ["delay_patterns"] ← links to process signals
+    evidence_rules: ["checkin_window"]     ← links to Layer 2 rules
+    risk_class: "low"
+    confidence: HIGH
+        ↓
+approve_decision
+    approved_by: "auto" (low risk) or "human:operator_jane" (high risk)
+    approved: true
+        ↓
+execute_decision_action
+    action_type: "notify_customer"
+    parameters: { customer_id: "C101", message: "connection safe" }
+    status: "completed"
+        ↓
+record_outcome
+    decision_summary: "Connection safe. Customer notified."
+    evidence_event_ids: [766218]           ← traceable back to triggering event
+    evidence_rules: ["checkin_window"]     ← traceable to governance rules
+    evidence_proposal_ids: [1]             ← traceable to the proposal
+    → stored as searchable precedent (search_precedent tool)
 ```
 
-**Responsibilities:**
-
-- Parse `business_rules.yml` from project folder
-- Match rules to data concepts (by metric name, dimension, keyword)
-- Return relevant caveats, guidance, and classifications
-- Inject critical rules into system prompt
-
-#### 3. New FastAPI endpoints
-
-Added to `apps/backend/fastapi/main.py`:
-
-**`POST /query_metrics`**
-
-```
-Request:
-{
-  "dazense_project_folder": "/path/to/project",
-  "measures": ["order_count", "total_amount"],
-  "dimensions": ["status"],
-  "filters": { "status": "completed" },
-  "order_by": [["total_amount", "desc"]],
-  "limit": 10
-}
-
-Response:
-{
-  "data": [
-    { "status": "completed", "order_count": 450, "total_amount": 89234.50 },
-    ...
-  ],
-  "columns": ["status", "order_count", "total_amount"],
-  "row_count": 3,
-  "sql": "SELECT status, COUNT(*), SUM(amount) FROM orders WHERE..."
-}
-```
-
-**`POST /get_business_context`**
-
-```
-Request:
-{
-  "dazense_project_folder": "/path/to/project",
-  "concepts": ["tips", "cash"],
-  "context_type": "caveats"      # or "classifications" or "all"
-}
-
-Response:
-{
-  "rules": [
-    {
-      "name": "cash_tips_not_recorded",
-      "severity": "critical",
-      "description": "Cash tips are NOT recorded in the data",
-      "guidance": "Exclude cash payments from any tip analysis"
-    }
-  ]
-}
-```
-
-#### 4. New agent tools
-
-Added to `apps/backend/src/agents/tools/`:
-
-**`query-metrics.ts`** — Calls `/query_metrics` on FastAPI. Same HTTP pattern as `execute-sql.ts`.
-
-```typescript
-// Input schema for the LLM
-{
-  measures: string[]      // e.g., ["order_count", "total_amount"]
-  dimensions?: string[]   // e.g., ["status", "customer.name"]
-  filters?: object        // e.g., { status: "completed" }
-  order_by?: [string, "asc" | "desc"][]
-  limit?: number
-}
-```
-
-**`get-business-context.ts`** — Calls `/get_business_context` on FastAPI.
-
-```typescript
-// Input schema for the LLM
-{
-  concepts: string[]      // e.g., ["tips", "cash_payments"]
-}
-```
-
-#### 5. System prompt changes
-
-In `apps/backend/src/components/system-prompt.tsx`:
-
-- If `semantic_model.yml` exists in the project folder, inject a section listing available metrics and dimensions
-- Add instructions: "Use query_metrics for defined metrics. Use execute_sql for ad-hoc exploration."
-- If `business_rules.yml` exists, inject critical rules (severity: critical) directly into the system prompt
-- Add instructions: "Call get_business_context when interpreting results or answering 'why' questions."
-
-#### 6. CLI changes
-
-In `cli/dazense_core/commands/sync/`:
-
-- During `dazense sync`, validate `semantic_model.yml` against actual database schema if both exist
-- Report warnings for undefined tables, missing columns, invalid expressions
-
-In `cli/dazense_core/commands/init/`:
-
-- Optionally scaffold a starter `semantic_model.yml` based on discovered tables
-- Auto-generate basic measures (count, sum of numeric columns) and dimensions (string/date columns)
-
-### What does NOT change
-
-- Frontend — no changes needed. Tool results already render generically.
-- tRPC routes — no changes. Chat flow is the same.
-- Auth, database, project management — untouched.
-- Existing tools (execute_sql, read, grep, list, search, display_chart) — untouched.
-- RULES.md — still works as before, complemented by structured business_rules.yml.
-
-### Agent decision flow (semantic layer)
-
-```
-User question arrives
-        |
-        v
-  System prompt includes:
-  - Database connections (existing)
-  - RULES.md (existing)
-  - Available metrics/dimensions from semantic_model.yml (NEW)
-  - Critical business rules from business_rules.yml (NEW)
-        |
-        v
-  LLM decides which tool to use:
-        |
-        +-- Question maps to a defined metric?
-        |     --> query_metrics tool
-        |
-        +-- Question needs ad-hoc exploration?
-        |     --> execute_sql tool (existing behavior)
-        |
-        +-- Question asks "why" or needs interpretation?
-        |     --> get_business_context tool
-        |
-        +-- Question needs file/doc lookup?
-        |     --> read, grep, list, search tools (existing)
-        |
-        v
-  Results returned to LLM
-        |
-        v
-  LLM generates answer with:
-  - Data from semantic layer or raw SQL
-  - Business context and caveats from rules engine
-  - Charts if applicable
-```
-
-### File inventory (semantic layer files only)
-
-```
-cli/dazense_core/semantic/__init__.py        # Module init
-cli/dazense_core/semantic/model.py           # YAML parser (~100 lines)
-cli/dazense_core/semantic/compiler.py        # Ibis query builder (~200 lines)
-cli/dazense_core/semantic/validator.py       # Schema validation (~100 lines)
-cli/dazense_core/rules/__init__.py           # Module init
-cli/dazense_core/rules/loader.py             # YAML parser (~50 lines)
-cli/dazense_core/rules/engine.py             # Rule matching (~100 lines)
-apps/backend/src/agents/tools/query-metrics.ts    # Agent tool (~40 lines)
-apps/backend/src/agents/tools/get-business-context.ts  # Agent tool (~40 lines)
-
-Total: ~650 lines of new code
-```
-
-### Dependencies (semantic layer)
-
-**None.** Everything uses existing dependencies:
-
-- Ibis (already in cli/pyproject.toml)
-- PyYAML (already in cli/pyproject.toml)
-- FastAPI/uvicorn (already running)
-- Vercel AI SDK (already in backend)
-
----
-
-## V1 Architecture: Trusted Analytics Copilot (Enforcement Layer)
-
-> **Status:** Implemented. All V1 components are live.
-
-The enforcement layer adds **contract-first execution** on top of the semantic layer and business rules. Every query must pass through a policy engine before data is accessed.
-
-### Overview
-
-```
-                    Browser
-                      |
-                      v
-              +---------------+
-              |   Frontend    |
-              |  :3000 (dev)  |
-              +-------+-------+
-                      |
-                      v
-              +---------------+
-              |   Backend     |
-              |    :5005      |
-              +-------+-------+
-                      |
-          +-----------+-----------+------------------+
-          |           |           |                  |
-          v           v           v                  v
-  +---------------+  +---------+  +---------------+  +---------------+
-  |   FastAPI     |  | Policy  |  |   LLM API     |  |   App DB      |
-  |    :8005      |  | Engine  |  |  (external)   |  | SQLite / PG   |
-  |               |  +---------+  +---------------+  +---------------+
-  | /execute_sql  |  | SQL     |
-  | /execute_py   |  | Valid.  |
-  | /query_metrics|  +---------+
-  | /business_ctx |  | Contract|
-  +-------+-------+  | Writer  |
-          |           +---------+
-    +-----+-----+
-    |     |     |
-    v     v     v
-  +---+ +---+ +---+
-  |Ibis| |Sem| |Biz|
-  |    | |Lyr| |Rul|
-  +---+ +---+ +---+
-    |     |
-    v     v
-  +---------------+
-  |   Database    |
-  |  (user data)  |
-  +---------------+
-```
-
-### What V1 adds
-
-#### 1. Policy Engine (`apps/backend/src/policy/policy-engine.ts`)
-
-Pure function: `evaluatePolicy(contractDraft, policy, bundles) → PolicyDecision`
-
-Checks (in order):
-
-1. **Bundle tables check** — all tables must be in the selected bundle's `tables` list
-2. **Join allowlist check** — all joins must match the bundle's approved join edges
-3. **PII block check** — no selected columns in `policy.pii.columns[table]`
-4. **Time filter check** — fact tables require a time window (configured per-table)
-5. **Limit check** — row limit must be ≤ `policy.defaults.max_rows`
-6. **Bundle requirement check** — if `execution.require_bundle=true` and no bundle → `needs_clarification`
-
-Returns one of three states:
-
-- `{ status: 'allow', checks }` — proceed with execution
-- `{ status: 'block', reason, fixes, checks }` — reject with actionable feedback
-- `{ status: 'needs_clarification', questions, checks }` — ask user for more info
-
-No file I/O — pure logic, easy to unit test.
-
-#### 2. SQL Validator (`apps/backend/src/policy/sql-validator.ts`)
-
-Validates the actual SQL against the contract and policy at execution time. Uses regex-based parsing (fail-closed: parse failure = block).
-
-Extracts from SQL:
-
-- Referenced tables (with alias resolution)
-- Multi-statement detection
-- LIMIT presence and value
-- JOIN edges (ON conditions with alias resolution)
-- WHERE clause time column references
-
-Validates:
-
-- All tables in contract scope
-- No PII columns referenced
-- LIMIT present and ≤ policy maximum
-- No multi-statement SQL
-- JOIN edges match approved join allowlist (bidirectional matching)
-- Time column referenced in WHERE clause for tables that require it
-
-#### 3. Contract Writer (`apps/backend/src/contracts/contract-writer.ts`)
-
-- `persistContract(contract, projectFolder)` — writes JSON to `{projectFolder}/contracts/runs/{timestamp}_{id}.json`
-- `loadContract(contractId, projectFolder)` — reads back by glob `contracts/runs/*_{id}.json`
-- Creates `contracts/runs/` directory if missing
-
-Each contract records: actor, request, scope (tables, approved joins, time columns), meaning (metric refs, guidance rules), execution (tool + params), and policy checks.
-
-#### 4. `build_contract` Agent Tool (`apps/backend/src/agents/tools/build-contract.ts`)
-
-First-class agent tool the LLM calls explicitly before any data access:
-
-```
-build_contract({
-  user_prompt: string,
-  bundle_id?: string,
-  tables: string[],
-  joins?: JoinSpec[],
-  metric_refs?: string[],
-  time_window?: TimeWindow,
-  tool: "execute_sql" | "query_metrics",
-  params: object
-}) → { status: 'allow', contract_id, contract }
-   | { status: 'block', reason, fixes }
-   | { status: 'needs_clarification', questions }
-```
-
-Tool output component (`build-contract.tsx`) shows status, contract_id, checks, and feedback.
-
-#### 5. Gated Execution (`execute-sql.ts`, `query-metrics.ts`)
-
-Both tools are modified to support two modes:
-
-- **Legacy mode** (`require_contract: false`): tools work as before, no contract needed
-- **Strict mode** (`require_contract: true`): tools require a valid `contract_id`
-
-In strict mode:
-
-- Missing `contract_id` → hard block: "Contract required. Call build_contract first."
-- Invalid `contract_id` → hard block
-- SQL parsed and validated against contract + policy before execution
-- `query_metrics` validates all parameters (model, measures, dimensions, filters with column+operator+value, order_by with column+direction, limit) match the contract
-
-#### 6. Loaders (`apps/backend/src/agents/user-rules.ts`)
-
-Two new functions following the existing pattern:
-
-- `getPolicies()` — reads `{projectFolder}/policies/policy.yml` → typed `PolicyConfig | null`
-- `getDatasetBundles()` — reads all `{projectFolder}/datasets/*/dataset.yaml` → `DatasetBundle[]`
-
-#### 7. Zod Schemas (`apps/shared/src/tools/build-contract.ts`)
-
-Contract schemas (input, output, internal contract structure) defined with Zod. `execute-sql.ts` and `query-metrics.ts` schemas extended with optional `contract_id` field.
-
-#### 8. System Prompt Updates (`system-prompt.tsx`)
-
-New conditional section injected when policies and bundles exist:
-
-- Trusted Execution Rules (always call `build_contract` first, work within bundles, PII blocked)
-- Bundle summaries (available data products, tables, approved joins)
-- Policy summary (enforcement mode, limits, PII rules)
-
-#### 9. `dazense validate` CLI Command (`cli/dazense_core/commands/validate.py`)
-
-Checks consistency across all governance files:
-
-- Config loads correctly
-- Bundle tables exist in configured databases
-- PII columns in policy exist in bundle tables
-- Join allowlist columns exist in referenced tables
-- Semantic model references align with bundle tables
-
-### V1 Runtime Flow
-
-```
-Current (legacy mode, require_contract: false):
-  Agent → execute_sql / query_metrics → FastAPI → DB → results
-
-New (strict mode, require_contract: true):
-  User question
-    → Agent reasons about the question
-    → Agent calls build_contract(bundle, tables, joins, metrics, params)
-    → Policy engine evaluates → allow / block / needs_clarification
-      → if allow:  contract persisted, agent calls execute_sql/query_metrics with contract_id
-                   → SQL validator checks SQL against contract + policy
-                   → results returned with provenance (contract_id, sources, checks)
-      → if block:  agent receives reason + suggested fixes, explains to user
-      → if clarify: agent receives questions, asks user, then retries build_contract
-```
-
-### V1 File Inventory (new files)
-
-```
-apps/shared/src/tools/build-contract.ts              # Zod schemas for build_contract
-apps/backend/src/policy/policy-engine.ts              # Policy evaluation (pure function)
-apps/backend/src/policy/sql-validator.ts              # SQL parsing + contract validation
-apps/backend/src/contracts/contract-writer.ts         # Persist/load contracts
-apps/backend/src/agents/tools/build-contract.ts       # build_contract tool implementation
-apps/backend/src/components/tool-outputs/build-contract.tsx  # Tool output component
-apps/backend/tests/sql-validator.test.ts              # Unit tests (31 tests)
-cli/dazense_core/commands/validate.py                 # dazense validate CLI command
-
-Modified:
-apps/backend/src/agents/user-rules.ts                 # getPolicies() + getDatasetBundles()
-apps/shared/src/tools/execute-sql.ts                   # contract_id field
-apps/shared/src/tools/query-metrics.ts                 # contract_id field
-apps/backend/src/agents/tools/execute-sql.ts           # Contract gate + SQL validation
-apps/backend/src/agents/tools/query-metrics.ts         # Contract gate + param validation
-apps/backend/src/agents/tools/index.ts                 # Register build_contract
-apps/backend/src/components/system-prompt.tsx           # Trusted Execution Rules section
-apps/backend/src/components/tool-outputs/index.ts      # Export BuildContractOutput
-```
-
-### V1 Dependencies
-
-- `node-sql-parser` (npm) — SQL parsing in the validator (new)
-- All other dependencies already existed
+Supporting tools:
+
+- `write_finding` / `read_findings`: shared workspace for multi-agent collaboration
+- `save_memory` / `recall_memory`: cross-session agent learnings
+
+### Memory Architecture (Split Design)
+
+**Working memory** (agent runtime side — Vercel AI SDK or any framework):
+
+- Prompt context, tool-call state, temporary reasoning, scratch notes
+- Ephemeral — dies with the session
+- Not governed, not persisted, not auditable
+- The agent's scratchpad during reasoning
+
+**Institutional memory** (harness side — MCP):
+
+- Episodic, semantic, procedural memories in `memory_entries` table
+- Evidence links, scope controls, PII redaction, confidence scoring
+- Persisted, governed, auditable
+- The organization's knowledge
+
+**Memory commit boundary**: At decision milestones (after `record_outcome`), the agent sends a curated learning to the harness via `save_memory`. The harness validates, redacts PII, and persists. Raw working-memory internals (failed queries, intermediate thinking, scratchpad notes) stay in the agent runtime and are never stored in the harness.
+
+This separation ensures:
+
+- Framework independence: switch from Vercel AI SDK to LangChain/CrewAI without losing institutional memory
+- Governance: only validated, PII-safe learnings enter the persistent store
+- Clean boundary: agents reason freely, harness stores durably
+
+### Layer 5: Action/Permission
+
+**Source**: Scenario configuration (agents.yml + policy.yml)
+
+| Risk class | Examples                                               | Approval                 |
+| ---------- | ------------------------------------------------------ | ------------------------ |
+| Low        | Read data, generate report, send info notification     | Auto-approved            |
+| Medium     | Flag for review, send warning notification             | Human review optional    |
+| High       | Rebook passenger, issue compensation (< EUR 400)       | Human approval required  |
+| Critical   | Cancel flight, override policy, compensation > EUR 400 | Senior approval required |
+
+Permission model:
+
+- **Propose**: which agents can recommend actions (all domain agents)
+- **Approve**: who can approve by risk class (auto for low, human for high)
+- **Execute**: who can trigger the actual action (harness, after approval)
+
+Progressive autonomy:
+
+- Start: human approves everything
+- After 50 successful low-risk decisions: auto-approve low risk
+- After 200 decisions with < 2% error: auto-approve medium risk
+- High/critical: always human
+
+## MCP Tools by Layer (31 tools total, all real except query_metrics)
+
+| Layer        | Tools                                                                                                                                 | Status                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1+2 Context  | get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale                                        | **Real** — catalog for entities/glossary/lineage, YAML for rationale.                                      |
+| 2 Governance | initialize_agent, get_business_rules + internal pipeline (auth, bundle, PII, joins, SQL, execution flags)                             | **Real** — PII from catalog, bundles + rules from YAML. Parameterized queries.                             |
+| 3 Event      | ingest_event, get_case_timeline, get_process_signals                                                                                  | **Real** — PostgreSQL events table (383K records). 4 signal types.                                         |
+| 4 Decision   | propose_decision, approve_decision, execute_decision_action, record_outcome, write_finding, read_findings, save_memory, recall_memory | **Real** — full lifecycle with evidence links. Permission-enforced approve/execute.                        |
+| 5 Action     | query_data, query_metrics, execute_action, get_permissions                                                                            | **Real** (query_metrics scaffold). Risk classification, permissions, approval gates, progressive autonomy. |
+| Admin        | find_governance_gaps, simulate_removal, graph_stats, audit_decisions                                                                  | **Real** — catalog + YAML cross-checks, lineage impact, decision audit.                                    |
+| Verify       | verify_result, check_freshness, check_consistency, get_confidence                                                                     | **Real** — rule compliance, SLA freshness, composite confidence scoring.                                   |
+
+### Security
+
+- All SQL queries use parameterized placeholders ($1, $2) — no string interpolation in SQL
+- PII blocked at SQL text level AND result schema level (SELECT \* on PII tables blocked)
+- PII redacted before persistence (findings, memory, outcomes filtered through filterPiiFromFinding)
+- Approval/execute permission enforcement checks agent role against risk class
+- Join allowlist enforcement blocks disallowed joins (returns allowed: false)
+- Defense-in-depth: all query results filtered through PII column list from catalog
+
+## Proving Workflow: Missed Connection Rebooking
+
+Forces all 5 layers to interact:
+
+1. **Event** (layer 3): `FlightDelayed` event for F1001 (45 min delay)
+2. **Context** (layer 1+2): Harness queries OMD — flight schedule, booking, customer loyalty tier
+3. **Process signal** (layer 3): "Connection buffer: 2h45m, minimum: 60min, 94% similar cases resolved without rebooking"
+4. **Governance** (layer 2): Rules — checkin_window (45 min), rebooking_priority (connections first), EU-261 compensation threshold (3h)
+5. **Decision proposal** (layer 4): Ops agent proposes "connection safe, no rebooking needed" with evidence
+6. **Risk classification** (layer 5): Low risk (informational, no financial action)
+7. **Auto-approved** (layer 5): Low risk → logged with evidence chain
+8. **Action** (layer 5): Notify customer + lounge voucher (Gold tier exception)
+9. **Outcome** (layer 4): Decision stored as precedent, evidence links to event, rules, and process signals
+
+## Technology Stack
+
+| Component          | Technology               | Purpose                                    |
+| ------------------ | ------------------------ | ------------------------------------------ |
+| Harness MCP server | TypeScript (MCP SDK)     | Core runtime                               |
+| Catalog platform   | OpenMetadata 1.12        | Knowledge graph, glossary, lineage         |
+| RDF store          | Apache Jena Fuseki       | SPARQL queries, semantic reasoning         |
+| Database           | PostgreSQL 16            | Scenario data + events + decisions         |
+| UI                 | React (dazense frontend) | Chat interface                             |
+| Backend            | Fastify + tRPC           | UI shell, MCP bridge                       |
+| Agent framework    | Any (via MCP)            | Pluggable — Claude, GPT, LangChain, CrewAI |

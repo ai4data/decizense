@@ -172,7 +172,7 @@ export function registerActionTools(server: McpServer) {
 			action_type: z
 				.string()
 				.describe('Action type (notify_customer, rebook_passenger, issue_compensation, etc.)'),
-			parameters: z.record(z.string()).describe('Action-specific parameters'),
+			parameters: z.record(z.string(), z.string()).describe('Action-specific parameters'),
 			reason: z.string().describe('Why this action is needed'),
 			session_id: z.string().optional().describe('Session ID for decision tracking'),
 			evidence_event_ids: z.array(z.number()).optional().describe('Evidence: event IDs'),

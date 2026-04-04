@@ -2,6 +2,16 @@
 
 This guide walks through testing all components of the harness: infrastructure, governance, agents, multi-agent orchestration, memory, and the proving workflow.
 
+## Quick smoke test
+
+Run the automated smoke test:
+
+```bash
+bash scripts/smoke-test.sh
+```
+
+This verifies: harness builds, 31 tools discovered, governance checks pass.
+
 ## Prerequisites
 
 Ensure all services are running:
@@ -37,6 +47,12 @@ export AZURE_RESOURCE_NAME=deepmig
 export AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-5.4
 ```
 
+Install dependencies on your current OS/WSL environment:
+
+```bash
+./scripts/bootstrap-platform-deps.sh
+```
+
 ---
 
 ## Part 1: Harness Core Tests (no LLM needed)
@@ -52,7 +68,7 @@ Expected output:
 ✅ All tests passed!
 
 Tests:
-- 24+ tools discovered
+- 31 tools discovered
 - initialize_agent returns identity, scope, rules
 - Delayed flights query: PASS (3 rows)
 - PII query: BLOCKED (customers not in bundle)
@@ -92,7 +108,11 @@ Ask:
 "What is the total revenue including cancelled bookings?"
 ```
 
-Expected: Agent should follow rule `revenue_excludes_cancelled` and exclude cancelled bookings, or warn that revenue must exclude them.
+Expected:
+
+- If routed to `flight_ops`: blocked by bundle scope (no bookings/payments access), while still surfacing rule guidance.
+- If routed to `booking` or orchestrator: revenue is computed with cancelled bookings excluded (or warning is returned).
+- End-user path should use orchestrator, not a fixed domain agent.
 
 ---
 
@@ -158,6 +178,8 @@ Expected:
 3. booking reports: 65K bookings, cancellation rate, revenue
 4. Orchestrator combines: overall health assessment with confidence score
 5. Decision recorded as precedent
+
+Note: LLM orchestration is probabilistic. If you see `No answer generated within step limit`, treat it as a runtime degradation (not a governance failure) and use Troubleshooting.
 
 ```bash
 npx tsx src/orchestrator.ts "How many flights were delayed and what was the revenue impact?"
@@ -406,6 +428,24 @@ netstat -ano | grep ":5005\|:3000\|:5433\|:8585\|:3030"
 
 ```bash
 cd harness && npx tsc --noEmit  # Check for TypeScript errors
+```
+
+### `esbuild` platform mismatch (Windows/WSL)
+
+Symptoms:
+
+- `You installed esbuild for another platform than the one you're currently using`
+
+Fix:
+
+```bash
+./scripts/bootstrap-platform-deps.sh
+```
+
+Then rerun:
+
+```bash
+./scripts/smoke-test.sh
 ```
 
 ### Database connection failed

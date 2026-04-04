@@ -327,7 +327,7 @@ export function registerPersistTools(server: McpServer) {
 			action_type: z
 				.string()
 				.describe('Action type: notify_customer, rebook_passenger, issue_compensation, escalate'),
-			parameters: z.record(z.string()).describe('Action parameters'),
+			parameters: z.record(z.string(), z.string()).describe('Action parameters'),
 		},
 		async ({ proposal_id, executor_id, action_type, parameters }) => {
 			try {

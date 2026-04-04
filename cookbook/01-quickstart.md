@@ -31,14 +31,28 @@ python generate_data.py
 
 Expected: ~1000 customers, ~450 flights, ~65K bookings, ~383K events.
 
-## Step 3: Install harness + agents
+## Step 3: Install dependencies
 
 ```bash
 cd ../../..  # back to repo root
 
+# Root (UI backend + frontend)
+npm install
+
+# Harness
 cd harness && npm install && cd ..
+
+# Agents (examples)
 cd agents && npm install && cd ..
 ```
+
+Or use the bootstrap script:
+
+```bash
+bash scripts/bootstrap-platform-deps.sh
+```
+
+> **Note**: If switching between Windows and WSL, run `npm install` from the target platform to get the correct esbuild binary.
 
 ## Step 4: Test governance (no LLM needed)
 

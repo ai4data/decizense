@@ -55,11 +55,17 @@ The shared workspace where agents coordinate. Each agent writes intermediate fin
 
 - `write_finding` — agent stores intermediate result for current session
 - `read_findings` — agent reads what other agents found in this session
-- `log_decision` — final decision recorded with full reasoning chain
+- `record_outcome` — final decision recorded with full reasoning chain and evidence links
 - `save_memory` — cross-session agent memory
 - `recall_memory` — retrieve past context
 
 **Source:** decision store (PostgreSQL) + context graph (persistent)
+
+Memory boundary in this layer:
+
+- Agent runtime working memory (current turn state, temporary scratchpad, planning context) belongs to the agent framework/runtime.
+- Harness memory is institutional memory: durable, governed, cross-session (`agent_memory` + structured `memory_entries`).
+- The orchestrator should persist only outcomes/findings that are useful as precedent or reusable lessons.
 
 ### 5. Observe & Verify — "Monitor, validate, self-correct"
 
@@ -107,7 +113,7 @@ Agent receives question
 5. PERSIST
     write_finding(session_id, agent=ops-agent, finding="Connection safe, 2h45m buffer")
     → Stored in shared workspace for other agents
-    log_decision(session_id, final_decision, reasoning, confidence)
+    record_outcome(session_id, question, decision_summary, confidence, ...)
     → Stored as precedent for future
 ```
 
@@ -177,7 +183,7 @@ Governance on the workspace:
      └─────────┘      └────────┘      └────────┘
           │                │                │
      ┌────▼────────────────▼────────────────▼────┐
-     │  ORCHESTRATOR (Claude Agent SDK / CrewAI)  │
+     │  ORCHESTRATOR (Vercel AI SDK / LangChain / Any MCP client) │
      └───────────────────────────────────────────┘
 ```
 

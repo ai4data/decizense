@@ -32,7 +32,7 @@ export function registerEventTools(server: McpServer) {
 			flight_id: z.number().optional().describe('Related flight ID'),
 			customer_id: z.number().optional().describe('Related customer ID'),
 			ticket_id: z.number().optional().describe('Related ticket ID'),
-			metadata: z.record(z.unknown()).optional().describe('Additional event data as JSON'),
+			metadata: z.record(z.string(), z.unknown()).optional().describe('Additional event data as JSON'),
 		},
 		async ({ event_type, booking_id, flight_id, customer_id, ticket_id, metadata }) => {
 			try {
