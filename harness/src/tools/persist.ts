@@ -160,6 +160,19 @@ export function registerPersistTools(server: McpServer) {
 					}
 				}
 
+				if (evidence_signal_types?.length) {
+					const validSignals = new Set([
+						'event_distribution',
+						'failure_rates',
+						'step_durations',
+						'delay_patterns',
+					]);
+					const missing = evidence_signal_types.filter((s) => !validSignals.has(s));
+					if (missing.length > 0) {
+						validationErrors.push(`Signal types not recognized: ${missing.join(', ')}`);
+					}
+				}
+
 				if (validationErrors.length > 0) {
 					return {
 						content: [
