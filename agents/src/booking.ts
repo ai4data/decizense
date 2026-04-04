@@ -1,19 +1,19 @@
 /**
- * Flight Operations Agent — queries flights, delays, airports via harness.
+ * Booking Agent — queries bookings, tickets, payments via harness.
  *
  * Usage:
- *   AZURE_OPENAI_API_KEY=... npx tsx src/flight-ops.ts "Which flights are delayed?"
+ *   AZURE_OPENAI_API_KEY=... npx tsx src/booking.ts "How many bookings in March 2026?"
  */
 
 import { HarnessClient } from './harness-client.js';
 import { callLLM } from './llm.js';
 
-const AGENT_ID = 'flight_ops';
+const AGENT_ID = 'booking';
 
 async function main() {
-	const question = process.argv[2] || 'Which flights are delayed today?';
+	const question = process.argv[2] || 'How many bookings were made in March 2026?';
 	const sessionId = process.argv[3] || `session-${Date.now()}`;
-	console.log(`\n🛫 Flight Operations Agent`);
+	console.log(`\n📋 Booking Agent`);
 	console.log(`Question: "${question}"\n`);
 
 	const harness = new HarnessClient();
@@ -23,7 +23,7 @@ async function main() {
 	console.log(`Identity: ${init.identity.display_name}`);
 	console.log(`Tables: ${init.scope.tables.join(', ')}\n`);
 
-	const rules = (await harness.getBusinessRules(['flights', 'flight_delays'])) as any;
+	const rules = (await harness.getBusinessRules(['bookings', 'tickets', 'payments'])) as any;
 	const rulesContext = rules.matched_rules
 		.map((r: any) => `- [${r.severity}] ${r.name}: ${r.description}`)
 		.join('\n');
@@ -41,7 +41,7 @@ ONLY query tables in your bundle. Respond with a clear finding.`;
 
 	console.log(`\n📋 Answer: ${answer.substring(0, 200)}`);
 
-	await harness.writeFinding(sessionId, AGENT_ID, answer, 'high', ['flights', 'flight_delays']);
+	await harness.writeFinding(sessionId, AGENT_ID, answer, 'high', ['bookings', 'tickets', 'payments']);
 	console.log('✅ Finding written');
 
 	await harness.close();

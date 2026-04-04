@@ -5,6 +5,9 @@
 	"type": "module",
 	"scripts": {
 		"flight-ops": "tsx src/flight-ops.ts",
+		"booking": "tsx src/booking.ts",
+		"customer-service": "tsx src/customer-service.ts",
+		"orchestrator": "tsx src/orchestrator.ts",
 		"test-query": "tsx src/test-query.ts"
 	},
 	"dependencies": {

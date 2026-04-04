@@ -1,19 +1,19 @@
 /**
- * Flight Operations Agent — queries flights, delays, airports via harness.
+ * Customer Service Agent — queries customers (PII blocked) via harness.
  *
  * Usage:
- *   AZURE_OPENAI_API_KEY=... npx tsx src/flight-ops.ts "Which flights are delayed?"
+ *   AZURE_OPENAI_API_KEY=... npx tsx src/customer-service.ts "How many Gold tier customers?"
  */
 
 import { HarnessClient } from './harness-client.js';
 import { callLLM } from './llm.js';
 
-const AGENT_ID = 'flight_ops';
+const AGENT_ID = 'customer_service';
 
 async function main() {
-	const question = process.argv[2] || 'Which flights are delayed today?';
+	const question = process.argv[2] || 'How many customers per loyalty tier?';
 	const sessionId = process.argv[3] || `session-${Date.now()}`;
-	console.log(`\n🛫 Flight Operations Agent`);
+	console.log(`\n👤 Customer Service Agent`);
 	console.log(`Question: "${question}"\n`);
 
 	const harness = new HarnessClient();
@@ -21,18 +21,14 @@ async function main() {
 
 	const init = (await harness.initializeAgent(AGENT_ID, sessionId, question)) as any;
 	console.log(`Identity: ${init.identity.display_name}`);
-	console.log(`Tables: ${init.scope.tables.join(', ')}\n`);
-
-	const rules = (await harness.getBusinessRules(['flights', 'flight_delays'])) as any;
-	const rulesContext = rules.matched_rules
-		.map((r: any) => `- [${r.severity}] ${r.name}: ${r.description}`)
-		.join('\n');
+	console.log(`Tables: ${init.scope.tables.join(', ')}`);
+	console.log(`PII blocked: ${init.scope.blocked_columns.join(', ')}\n`);
 
 	const systemPrompt = `${init.system_prompt}
 Tables: ${init.scope.tables.join(', ')}
 Max rows: ${init.constraints.max_rows}. Always include LIMIT.
-Rules:\n${rulesContext}
-ONLY query tables in your bundle. Respond with a clear finding.`;
+PII BLOCKED columns: first_name, last_name, email, phone — NEVER query these.
+Use customer_id for identification. Report tier and eligibility only.`;
 
 	const answer = await callLLM(systemPrompt, question, async (sql: string, reason: string) => {
 		console.log(`  📊 ${sql.substring(0, 80)}...`);
@@ -41,7 +37,7 @@ ONLY query tables in your bundle. Respond with a clear finding.`;
 
 	console.log(`\n📋 Answer: ${answer.substring(0, 200)}`);
 
-	await harness.writeFinding(sessionId, AGENT_ID, answer, 'high', ['flights', 'flight_delays']);
+	await harness.writeFinding(sessionId, AGENT_ID, answer, 'high', ['customers']);
 	console.log('✅ Finding written');
 
 	await harness.close();
