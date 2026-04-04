@@ -137,6 +137,42 @@ export function registerPersistTools(server: McpServer) {
 			evidence_rules,
 		}) => {
 			try {
+				// Validate evidence links before storing
+				const validationErrors: string[] = [];
+
+				if (evidence_event_ids?.length) {
+					const eventCheck = await executeQuery(
+						`SELECT event_id FROM events WHERE event_id = ANY($1::integer[])`,
+						[evidence_event_ids],
+					);
+					const foundIds = new Set((eventCheck.rows as Array<{ event_id: number }>).map((r) => r.event_id));
+					const missing = evidence_event_ids.filter((id) => !foundIds.has(id));
+					if (missing.length > 0) {
+						validationErrors.push(`Event IDs not found: ${missing.join(', ')}`);
+					}
+				}
+
+				if (evidence_rules?.length && loader) {
+					const knownRules = new Set(loader.businessRules.map((r) => r.name));
+					const missing = evidence_rules.filter((r) => !knownRules.has(r));
+					if (missing.length > 0) {
+						validationErrors.push(`Business rules not found: ${missing.join(', ')}`);
+					}
+				}
+
+				if (validationErrors.length > 0) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									error: `Evidence validation failed: ${validationErrors.join('; ')}`,
+								}),
+							},
+						],
+					};
+				}
+
 				const result = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
 					   evidence_event_ids, evidence_signal_types, evidence_rules)
@@ -396,6 +432,48 @@ export function registerPersistTools(server: McpServer) {
 			evidence_proposal_ids,
 		}) => {
 			try {
+				// Validate evidence links
+				const validationErrors: string[] = [];
+
+				if (evidence_event_ids?.length) {
+					const check = await executeQuery(
+						`SELECT event_id FROM events WHERE event_id = ANY($1::integer[])`,
+						[evidence_event_ids],
+					);
+					const found = new Set((check.rows as Array<{ event_id: number }>).map((r) => r.event_id));
+					const missing = evidence_event_ids.filter((id) => !found.has(id));
+					if (missing.length > 0) validationErrors.push(`Event IDs not found: ${missing.join(', ')}`);
+				}
+
+				if (evidence_proposal_ids?.length) {
+					const check = await executeQuery(
+						`SELECT proposal_id FROM decision_proposals WHERE proposal_id = ANY($1::integer[])`,
+						[evidence_proposal_ids],
+					);
+					const found = new Set((check.rows as Array<{ proposal_id: number }>).map((r) => r.proposal_id));
+					const missing = evidence_proposal_ids.filter((id) => !found.has(id));
+					if (missing.length > 0) validationErrors.push(`Proposal IDs not found: ${missing.join(', ')}`);
+				}
+
+				if (evidence_rules?.length && loader) {
+					const knownRules = new Set(loader.businessRules.map((r) => r.name));
+					const missing = evidence_rules.filter((r) => !knownRules.has(r));
+					if (missing.length > 0) validationErrors.push(`Rules not found: ${missing.join(', ')}`);
+				}
+
+				if (validationErrors.length > 0) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									error: `Evidence validation failed: ${validationErrors.join('; ')}`,
+								}),
+							},
+						],
+					};
+				}
+
 				const safeSummary = filterPiiFromFinding(decision_summary);
 				const safeReasoning = filterPiiFromFinding(reasoning);
 				const result = await executeQuery(
