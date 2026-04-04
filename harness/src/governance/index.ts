@@ -271,6 +271,15 @@ export async function evaluateGovernance(params: {
 			} catch {
 				/* bundle not found — already caught above */
 			}
+
+			const failedJoins = checks.filter((c) => c.name === 'join_allowlist' && !c.passed);
+			if (failedJoins.length > 0) {
+				return {
+					allowed: false,
+					reason: `Join not in bundle allowlist: ${failedJoins.map((j) => j.detail).join('; ')}`,
+					checks,
+				};
+			}
 		}
 
 		// ── 5c. Execution permission check ──

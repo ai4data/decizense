@@ -263,9 +263,11 @@ Progressive autonomy:
 
 ### Security
 
-- All SQL queries use parameterized placeholders ($1, $2, etc.)
+- All SQL queries use parameterized placeholders ($1, $2) — no string interpolation in SQL
 - PII blocked at SQL text level AND result schema level (SELECT \* on PII tables blocked)
+- PII redacted before persistence (findings, memory, outcomes filtered through filterPiiFromFinding)
 - Approval/execute permission enforcement checks agent role against risk class
+- Join allowlist enforcement blocks disallowed joins (returns allowed: false)
 - Defense-in-depth: all query results filtered through PII column list from catalog
 
 ## Proving Workflow: Missed Connection Rebooking

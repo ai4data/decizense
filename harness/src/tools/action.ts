@@ -220,7 +220,8 @@ export function registerActionTools(server: McpServer) {
 				} else {
 					// Check if progressive autonomy has promoted this risk class
 					const autonomyResult = await executeQuery(
-						`SELECT auto_approved FROM autonomy_stats WHERE risk_class = '${riskClass}'`,
+						`SELECT auto_approved FROM autonomy_stats WHERE risk_class = $1`,
+						[riskClass],
 					);
 					if (autonomyResult.rowCount > 0) {
 						autoApproved = (autonomyResult.rows[0] as { auto_approved: boolean }).auto_approved;
@@ -228,19 +229,26 @@ export function registerActionTools(server: McpServer) {
 				}
 
 				// ── Step 4: Create proposal in Layer 4 ──
-				const eventIds = evidence_event_ids?.length ? `ARRAY[${evidence_event_ids.join(',')}]` : 'NULL';
-				const rulesArr = evidence_rules?.length
-					? `ARRAY[${evidence_rules.map((r) => `'${r}'`).join(',')}]`
-					: 'NULL';
+				const eventIdsParam = evidence_event_ids?.length ? evidence_event_ids : null;
+				const rulesParam = evidence_rules?.length ? evidence_rules : null;
 				const sid = session_id ?? `action-${Date.now()}`;
 
 				const proposalResult = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
 					   evidence_event_ids, evidence_rules, status)
-					 VALUES ('${sid}', '${agent_id}', '${reason.replace(/'/g, "''")}',
-					   'high', '${riskClass}', ${eventIds}, ${rulesArr},
-					   '${autoApproved ? 'approved' : 'pending'}')
+					 VALUES ($1, $2, $3,
+					   'high', $4, $5, $6,
+					   $7)
 					 RETURNING proposal_id`,
+					[
+						sid,
+						agent_id,
+						reason,
+						riskClass,
+						eventIdsParam,
+						rulesParam,
+						autoApproved ? 'approved' : 'pending',
+					],
 				);
 				const proposalId = (proposalResult.rows[0] as { proposal_id: number }).proposal_id;
 
@@ -248,24 +256,26 @@ export function registerActionTools(server: McpServer) {
 					// Auto-approve and execute
 					await executeQuery(
 						`INSERT INTO decision_approvals (proposal_id, approved_by, approved, reason)
-						 VALUES (${proposalId}, 'auto', true, 'Auto-approved: ${riskClass} risk')`,
+						 VALUES ($1, 'auto', true, $2)`,
+						[proposalId, `Auto-approved: ${riskClass} risk`],
 					);
 
-					const paramsJson = JSON.stringify(parameters).replace(/'/g, "''");
 					await executeQuery(
 						`INSERT INTO decision_actions (proposal_id, action_type, parameters, status)
-						 VALUES (${proposalId}, '${action_type}', '${paramsJson}'::jsonb, 'completed')`,
+						 VALUES ($1, $2, $3::jsonb, 'completed')`,
+						[proposalId, action_type, JSON.stringify(parameters)],
 					);
 
-					await executeQuery(
-						`UPDATE decision_proposals SET status = 'executed' WHERE proposal_id = ${proposalId}`,
-					);
+					await executeQuery(`UPDATE decision_proposals SET status = 'executed' WHERE proposal_id = $1`, [
+						proposalId,
+					]);
 
 					// Track for progressive autonomy
 					await executeQuery(
 						`UPDATE autonomy_stats SET total_decisions = total_decisions + 1,
 						   successful_decisions = successful_decisions + 1, updated_at = NOW()
-						 WHERE risk_class = '${riskClass}'`,
+						 WHERE risk_class = $1`,
+						[riskClass],
 					);
 
 					return {

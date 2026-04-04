@@ -150,11 +150,13 @@ export function registerVerifyTools(server: McpServer) {
 
 				// Check last event timestamp for this table as a proxy for freshness
 				try {
+					const likePattern = `%${tableName.charAt(0).toUpperCase() + tableName.slice(1)}%`;
 					const result = await executeQuery(
 						`SELECT MAX(timestamp) as last_update FROM events
-						 WHERE event_type LIKE '%${tableName.charAt(0).toUpperCase() + tableName.slice(1)}%'
+						 WHERE event_type LIKE $1
 						 OR flight_id IS NOT NULL
 						 LIMIT 1`,
+						[likePattern],
 					);
 					const lastUpdate = result.rows[0] as { last_update: string | null };
 
@@ -322,7 +324,8 @@ export function registerVerifyTools(server: McpServer) {
 			let precedentScore = 0.5; // default: no precedent
 			try {
 				const result = await executeQuery(
-					`SELECT COUNT(*) as count FROM decision_outcomes WHERE session_id != '${session_id}'`,
+					`SELECT COUNT(*) as count FROM decision_outcomes WHERE session_id != $1`,
+					[session_id],
 				);
 				const count = parseInt((result.rows[0] as { count: string }).count);
 				if (count > 10) precedentScore = 0.9;

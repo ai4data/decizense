@@ -11,6 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
+import { filterPiiFromFinding } from '../governance/index.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -33,11 +34,12 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ session_id, agent_id, finding, confidence, data_sources }) => {
 			try {
+				const safeFinding = filterPiiFromFinding(finding);
 				const result = await executeQuery(
 					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources)
 					 VALUES ($1, $2, $3, $4, $5)
 					 RETURNING finding_id, created_at`,
-					[session_id, agent_id, finding, confidence, data_sources ?? null],
+					[session_id, agent_id, safeFinding, confidence, data_sources ?? null],
 				);
 				const row = result.rows[0] as { finding_id: number; created_at: string };
 				return {
@@ -394,6 +396,8 @@ export function registerPersistTools(server: McpServer) {
 			evidence_proposal_ids,
 		}) => {
 			try {
+				const safeSummary = filterPiiFromFinding(decision_summary);
+				const safeReasoning = filterPiiFromFinding(reasoning);
 				const result = await executeQuery(
 					`INSERT INTO decision_outcomes (session_id, question, decision_summary, reasoning, confidence,
 					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids)
@@ -402,8 +406,8 @@ export function registerPersistTools(server: McpServer) {
 					[
 						session_id,
 						question,
-						decision_summary,
-						reasoning,
+						safeSummary,
+						safeReasoning,
 						confidence,
 						agents_involved,
 						cost_usd ?? 0,
@@ -456,11 +460,12 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({ agent_id, key, content }) => {
 			try {
+				const safeContent = filterPiiFromFinding(content);
 				await executeQuery(
 					`INSERT INTO agent_memory (agent_id, key, content)
 					 VALUES ($1, $2, $3)
 					 ON CONFLICT (agent_id, key) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()`,
-					[agent_id, key, content],
+					[agent_id, key, safeContent],
 				);
 				return {
 					content: [
