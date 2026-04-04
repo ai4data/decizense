@@ -11,6 +11,17 @@ import { parse as parseYaml } from 'yaml';
 
 // ─── Types ───
 
+export interface AuthConfig {
+	mode: 'jwt' | 'config-only';
+	trust_domain?: string;
+	verify_strategy?: 'jwks' | 'shared_secret' | 'introspection';
+	jwt_secret?: string;
+	jwks_uri?: string;
+	issuer?: string;
+	audience?: string;
+	introspection_url?: string;
+}
+
 export interface ScenarioConfig {
 	name: string;
 	display_name: string;
@@ -18,6 +29,7 @@ export interface ScenarioConfig {
 	domain: string;
 	database: DatabaseConfig;
 	catalog?: CatalogConfig;
+	auth?: AuthConfig;
 }
 
 export interface DatabaseConfig {

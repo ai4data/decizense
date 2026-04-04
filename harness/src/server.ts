@@ -24,6 +24,7 @@ import { ScenarioLoader } from './config/index.js';
 import { initCatalog } from './catalog/index.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
+import { resolveAuthContext } from './auth/context.js';
 import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
@@ -77,6 +78,15 @@ async function main() {
 			console.error(`[harness] Catalog: ${healthy ? 'connected' : 'unreachable'} (${scenario.catalog?.url})`);
 		} else {
 			console.error('[harness] Catalog: not configured (using YAML only)');
+		}
+
+		// Initialize auth context (must be before tool registration)
+		const authCtx = await resolveAuthContext(loader);
+		const authMode = scenario.auth?.mode ?? 'config-only';
+		if (authCtx.agentId) {
+			console.error(`[harness] Auth: ${authMode} | agent=${authCtx.agentId} | uri=${authCtx.agentUri}`);
+		} else {
+			console.error(`[harness] Auth: ${authMode} (agent identity will be set by initialize_agent)`);
 		}
 
 		// Initialize all engines

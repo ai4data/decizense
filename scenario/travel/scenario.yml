@@ -18,3 +18,10 @@ catalog:
     url: "{{ env('CATALOG_URL', 'http://localhost:8585') }}"
     token: "{{ env('CATALOG_TOKEN') }}"
     service_name: travel_postgres
+
+auth:
+    mode: "{{ env('AUTH_MODE', 'config-only') }}"
+    trust_domain: dazense.local
+    verify_strategy: shared_secret
+    jwt_secret: "{{ env('JWT_SECRET') }}"
+    audience: dazense-harness

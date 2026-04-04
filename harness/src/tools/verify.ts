@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getCatalogClient } from '../catalog/index.js';
+import { getAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -23,15 +24,15 @@ export function registerVerifyTools(server: McpServer) {
 	 */
 	server.tool(
 		'verify_result',
-		"Verify an agent's result against business rules and intents",
+		'Verify your result against business rules and intents',
 		{
-			agent_id: z.string().describe('Agent whose result is being verified'),
 			question: z.string().describe('The original question'),
 			result_summary: z.string().describe('Summary of the result to verify'),
 			sql_used: z.string().optional().describe('The SQL query that produced the result'),
 			measures_used: z.array(z.string()).optional().describe('Measures used'),
 		},
-		async ({ agent_id, question, result_summary, sql_used, measures_used }) => {
+		async ({ question, result_summary, sql_used, measures_used }) => {
+			const agent_id = getAuthContext().agentId;
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
@@ -211,11 +212,11 @@ export function registerVerifyTools(server: McpServer) {
 		'check_consistency',
 		'Check if a result is consistent with applicable business rules',
 		{
-			agent_id: z.string().describe('Agent whose result is being checked'),
 			result_summary: z.string().describe('The result to check'),
 			applicable_rules: z.array(z.string()).optional().describe('Rules to check against'),
 		},
-		async ({ agent_id, result_summary, applicable_rules }) => {
+		async ({ result_summary, applicable_rules }) => {
+			const agent_id = getAuthContext().agentId;
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}

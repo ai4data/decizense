@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { evaluateGovernance, filterPiiFromResults } from '../governance/index.js';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
+import { getAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -31,11 +32,11 @@ export function registerActionTools(server: McpServer) {
 		'query_data',
 		'Execute a SQL query — governance is enforced automatically by the harness',
 		{
-			agent_id: z.string().describe('Agent executing the query'),
 			sql: z.string().describe('SQL query to execute'),
 			reason: z.string().optional().describe('Why this query is needed (for audit trail)'),
 		},
-		async ({ agent_id, sql, reason }) => {
+		async ({ sql, reason }) => {
+			const agent_id = getAuthContext().agentId;
 			const governance = await evaluateGovernance({ agent_id, sql });
 
 			if (!governance.allowed) {
@@ -112,12 +113,12 @@ export function registerActionTools(server: McpServer) {
 		'query_metrics',
 		'Query semantic measures and dimensions — governance enforced automatically',
 		{
-			agent_id: z.string().describe('Agent executing the query'),
 			measures: z.array(z.string()).describe("Measure names (e.g. ['bookings.total_revenue'])"),
 			dimensions: z.array(z.string()).optional().describe('Dimensions to group by'),
 			filters: z.array(z.object({ dimension: z.string(), operator: z.string(), value: z.string() })).optional(),
 		},
-		async ({ agent_id, measures, dimensions, filters }) => {
+		async ({ measures, dimensions, filters }) => {
+			const agent_id = getAuthContext().agentId;
 			const governance = await evaluateGovernance({ agent_id, metric_refs: measures });
 			if (!governance.allowed) {
 				return {
@@ -168,7 +169,6 @@ export function registerActionTools(server: McpServer) {
 		'execute_action',
 		'Trigger an action — risk classified, permissions checked, approval enforced automatically',
 		{
-			agent_id: z.string().describe('Agent requesting the action'),
 			action_type: z
 				.string()
 				.describe('Action type (notify_customer, rebook_passenger, issue_compensation, etc.)'),
@@ -178,7 +178,8 @@ export function registerActionTools(server: McpServer) {
 			evidence_event_ids: z.array(z.number()).optional().describe('Evidence: event IDs'),
 			evidence_rules: z.array(z.string()).optional().describe('Evidence: business rules'),
 		},
-		async ({ agent_id, action_type, parameters, reason, session_id, evidence_event_ids, evidence_rules }) => {
+		async ({ action_type, parameters, reason, session_id, evidence_event_ids, evidence_rules }) => {
+			const agent_id = getAuthContext().agentId;
 			if (!loader) {
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],
@@ -329,11 +330,10 @@ export function registerActionTools(server: McpServer) {
 	 */
 	server.tool(
 		'get_permissions',
-		'Check what actions an agent is permitted to propose, approve, and execute',
-		{
-			agent_id: z.string().describe('Agent to check permissions for'),
-		},
-		async ({ agent_id }) => {
+		'Check what actions you are permitted to propose, approve, and execute',
+		{},
+		async () => {
+			const agent_id = getAuthContext().agentId;
 			if (!loader) {
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],

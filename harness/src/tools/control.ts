@@ -13,6 +13,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ScenarioLoader } from '../config/index.js';
 import { authenticateAgent } from '../governance/index.js';
+import { getAuthContext, setAgentIdIfEmpty, setSessionId } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -42,6 +43,29 @@ export function registerControlTools(server: McpServer) {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],
 				};
 			}
+
+			// ── AuthContext validation ──
+			const authCtx = getAuthContext();
+			const trustDomain = loader.scenario.auth?.trust_domain ?? 'dazense.local';
+
+			if (authCtx.agentId === '') {
+				// config-only mode without AGENT_ID env — set from first initialize_agent call
+				setAgentIdIfEmpty(agent_id, trustDomain);
+			} else if (authCtx.agentId !== agent_id) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify({
+								error: `agent_id "${agent_id}" does not match authenticated identity "${authCtx.agentId}"`,
+							}),
+						},
+					],
+				};
+			}
+
+			// Bind session to auth context
+			setSessionId(session_id);
 
 			// ── Identity ──
 			const identity = authenticateAgent(agent_id);
@@ -129,6 +153,8 @@ export function registerControlTools(server: McpServer) {
 									role: agentConfig.role,
 									display_name: agentConfig.display_name,
 									authenticated: true,
+									agent_uri: getAuthContext().agentUri,
+									auth_method: getAuthContext().authMethod,
 								},
 								system_prompt: agentConfig.system_prompt ?? '',
 								scope: {
