@@ -225,6 +225,30 @@ Supporting tools:
 - `write_finding` / `read_findings`: shared workspace for multi-agent collaboration
 - `save_memory` / `recall_memory`: cross-session agent learnings
 
+### Memory Architecture (Split Design)
+
+**Working memory** (agent runtime side — Vercel AI SDK or any framework):
+
+- Prompt context, tool-call state, temporary reasoning, scratch notes
+- Ephemeral — dies with the session
+- Not governed, not persisted, not auditable
+- The agent's scratchpad during reasoning
+
+**Institutional memory** (harness side — MCP):
+
+- Episodic, semantic, procedural memories in `memory_entries` table
+- Evidence links, scope controls, PII redaction, confidence scoring
+- Persisted, governed, auditable
+- The organization's knowledge
+
+**Memory commit boundary**: At decision milestones (after `record_outcome`), the agent sends a curated learning to the harness via `save_memory`. The harness validates, redacts PII, and persists. Raw working-memory internals (failed queries, intermediate thinking, scratchpad notes) stay in the agent runtime and are never stored in the harness.
+
+This separation ensures:
+
+- Framework independence: switch from Vercel AI SDK to LangChain/CrewAI without losing institutional memory
+- Governance: only validated, PII-safe learnings enter the persistent store
+- Clean boundary: agents reason freely, harness stores durably
+
 ### Layer 5: Action/Permission
 
 **Source**: Scenario configuration (agents.yml + policy.yml)
