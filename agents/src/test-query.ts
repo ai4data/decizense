@@ -10,7 +10,7 @@ import { HarnessClient } from './harness-client.js';
 async function main() {
 	console.log('🧪 Harness Connection Test\n');
 
-	const harness = new HarnessClient('flight_ops');
+	const harness = new HarnessClient('flight_ops', process.env.OPS_TOKEN);
 	await harness.connect('../scenario/travel');
 
 	// List tools

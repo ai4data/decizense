@@ -105,7 +105,13 @@ async function main() {
 		const piiCount = Object.values(policy.pii.columns).flat().length;
 		console.error(`[harness] Policy: ${piiCount} PII columns blocked, max ${policy.defaults.max_rows} rows`);
 	} catch (err) {
-		console.error(`[harness] Warning: Could not load scenario config: ${(err as Error).message}`);
+		const message = (err as Error).message;
+		// Auth errors are fatal — never fall through to scaffold mode
+		if (message.includes('token') || message.includes('AGENT_TOKEN') || message.includes('Auth')) {
+			console.error(`[harness] FATAL: ${message}`);
+			process.exit(1);
+		}
+		console.error(`[harness] Warning: Could not load scenario config: ${message}`);
 		console.error(`[harness] Running with scaffold responses only`);
 	}
 
