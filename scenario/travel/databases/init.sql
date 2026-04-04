@@ -1,6 +1,9 @@
 -- Travel Booking Database Schema
 -- Ontology-aligned: every FK relationship maps to an entity relationship in the context graph
 
+-- Required for gen_random_uuid() in memory_entries
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Airlines
 CREATE TABLE airlines (
     airline_code VARCHAR(3) PRIMARY KEY,

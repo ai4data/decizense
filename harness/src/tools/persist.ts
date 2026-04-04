@@ -520,13 +520,20 @@ export function registerPersistTools(server: McpServer) {
 
 				// Auto-capture episodic memory from outcome
 				try {
+					// Determine scope: use first agent's bundle, or 'global' if orchestrator
+					const firstAgent = agents_involved[0];
+					const agentBundle = loader?.agents?.agents?.[firstAgent]?.bundle;
+					const scopeType = agentBundle ? 'bundle' : 'global';
+					const scopeId = agentBundle ?? 'global';
+
 					await executeQuery(
 						`INSERT INTO memory_entries (memory_type, scope_type, scope_id, status, title, summary, content,
 						   confidence, source_outcome_id, evidence_event_ids, evidence_rules, evidence_signal_types)
-						 VALUES ('episodic', 'bundle', $1, 'candidate', $2, $3, $4::jsonb, $5,
-						         $6, $7::integer[], $8::text[], $9::text[])`,
+						 VALUES ('episodic', $1, $2, 'candidate', $3, $4, $5::jsonb, $6,
+						         $7, $8::integer[], $9::text[], $10::text[])`,
 						[
-							session_id,
+							scopeType,
+							scopeId,
 							question.substring(0, 200),
 							safeSummary,
 							JSON.stringify({
