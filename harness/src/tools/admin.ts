@@ -200,7 +200,9 @@ export function registerAdminTools(server: McpServer) {
 			const catalog = getCatalogClient();
 			if (catalog) {
 				try {
-					const fqn = `travel_postgres.travel_db.public.${table_name}`;
+					const serviceName = loader?.scenario?.catalog?.service_name ?? 'default';
+					const dbName = loader?.scenario?.database?.name ?? 'db';
+					const fqn = `${serviceName}.${dbName}.public.${table_name}`;
 					const lineage = await catalog.getLineage(fqn);
 					for (const edge of lineage) {
 						impact.push({

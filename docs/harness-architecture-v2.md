@@ -249,17 +249,24 @@ Progressive autonomy:
 - After 200 decisions with < 2% error: auto-approve medium risk
 - High/critical: always human
 
-## MCP Tools by Layer (28 tools total)
+## MCP Tools by Layer (29 tools total, all real except query_metrics)
 
-| Layer        | Tools                                                                                                                                 | Status                                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 1+2 Context  | get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale                                        | **Real** — reads from OMD catalog (glossary, lineage, entities). get_rationale from YAML.                     |
-| 2 Governance | initialize_agent, get_business_rules + internal governance pipeline (10-point check)                                                  | **Real** — PII from OMD, bundles + rules from YAML.                                                           |
-| 3 Event      | ingest_event, get_case_timeline, get_process_signals                                                                                  | **Real** — PostgreSQL events table (383K records). 4 signal types.                                            |
-| 4 Decision   | propose_decision, approve_decision, execute_decision_action, record_outcome, write_finding, read_findings, save_memory, recall_memory | **Real** — full lifecycle with evidence links to events, signals, rules. PostgreSQL.                          |
-| 5 Action     | query_data, query_metrics, execute_action, get_permissions                                                                            | **Real** — risk classification, permission checks, approval gates, progressive autonomy. Layer 4 integration. |
-| Admin        | find_governance_gaps, simulate_removal, graph_stats, audit_decisions                                                                  | Scaffold                                                                                                      |
-| Verify       | verify_result, check_freshness, check_consistency, get_confidence                                                                     | Scaffold                                                                                                      |
+| Layer        | Tools                                                                                                                                 | Status                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1+2 Context  | get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale                                        | **Real** — catalog for entities/glossary/lineage, YAML for rationale.                                      |
+| 2 Governance | initialize_agent, get_business_rules + internal pipeline (auth, bundle, PII, joins, SQL, execution flags)                             | **Real** — PII from catalog, bundles + rules from YAML. Parameterized queries.                             |
+| 3 Event      | ingest_event, get_case_timeline, get_process_signals                                                                                  | **Real** — PostgreSQL events table (383K records). 4 signal types.                                         |
+| 4 Decision   | propose_decision, approve_decision, execute_decision_action, record_outcome, write_finding, read_findings, save_memory, recall_memory | **Real** — full lifecycle with evidence links. Permission-enforced approve/execute.                        |
+| 5 Action     | query_data, query_metrics, execute_action, get_permissions                                                                            | **Real** (query_metrics scaffold). Risk classification, permissions, approval gates, progressive autonomy. |
+| Admin        | find_governance_gaps, simulate_removal, graph_stats, audit_decisions                                                                  | **Real** — catalog + YAML cross-checks, lineage impact, decision audit.                                    |
+| Verify       | verify_result, check_freshness, check_consistency, get_confidence                                                                     | **Real** — rule compliance, SLA freshness, composite confidence scoring.                                   |
+
+### Security
+
+- All SQL queries use parameterized placeholders ($1, $2, etc.)
+- PII blocked at SQL text level AND result schema level (SELECT \* on PII tables blocked)
+- Approval/execute permission enforcement checks agent role against risk class
+- Defense-in-depth: all query results filtered through PII column list from catalog
 
 ## Proving Workflow: Missed Connection Rebooking
 

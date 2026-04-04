@@ -194,7 +194,9 @@ export function registerContextTools(server: McpServer) {
 			}
 
 			// Build full FQN if not provided
-			const fqn = entity_id.includes('.') ? entity_id : `travel_postgres.travel_db.public.${entity_id}`;
+			const fqn = entity_id.includes('.')
+				? entity_id
+				: `${loader?.scenario?.name ?? 'default'}.${loader?.scenario?.database?.name ?? 'db'}.public.${entity_id}`;
 
 			const edges = await catalog.getLineage(fqn, max_depth);
 
