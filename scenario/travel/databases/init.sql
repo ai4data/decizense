@@ -134,6 +134,9 @@ CREATE TABLE decision_proposals (
     evidence_signal_types TEXT[],
     evidence_rules TEXT[],
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'executed', 'completed')),
+    auth_method VARCHAR(20),
+    token_hash VARCHAR(16),
+    correlation_id VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -171,6 +174,9 @@ CREATE TABLE decision_outcomes (
     evidence_rules TEXT[],
     evidence_signal_types TEXT[],
     evidence_proposal_ids INTEGER[],
+    auth_method VARCHAR(20),
+    token_hash VARCHAR(16),
+    correlation_id VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -181,6 +187,9 @@ CREATE TABLE decision_findings (
     finding TEXT NOT NULL,
     confidence VARCHAR(10) NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
     data_sources TEXT[],
+    auth_method VARCHAR(20),
+    token_hash VARCHAR(16),
+    correlation_id VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
