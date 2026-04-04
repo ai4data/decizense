@@ -43,7 +43,12 @@ async function callAzureChat(
  * Run the LLM agent loop with a query tool.
  * Returns the final text answer.
  */
-export async function callLLM(systemPrompt: string, question: string, queryFn: QueryFn, maxSteps = 7): Promise<string> {
+export async function callLLM(
+	systemPrompt: string,
+	question: string,
+	queryFn: QueryFn,
+	maxSteps = 12,
+): Promise<string> {
 	const tools = [
 		{
 			type: 'function',
