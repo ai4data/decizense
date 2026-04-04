@@ -249,7 +249,7 @@ Progressive autonomy:
 - After 200 decisions with < 2% error: auto-approve medium risk
 - High/critical: always human
 
-## MCP Tools by Layer (29 tools total, all real except query_metrics)
+## MCP Tools by Layer (31 tools total, all real except query_metrics)
 
 | Layer        | Tools                                                                                                                                 | Status                                                                                                     |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
