@@ -1,0 +1,32 @@
+🔁 Phase 1c Orchestrator Idempotency Test
+
+Workflow ID: orch-idempotency-1775421056383
+Session ID:  orch-session-idempotency-1775421056383
+
+Initializing DBOS (v4.13.5)
+System Database URL: postgres://travel_admin:***@localhost:5433/travel_db
+Executor ID: local
+Application version: dazense-agent-dev
+No workflows to recover from application version dazense-agent-dev
+DBOS launched!
+[dbos] agent runtime initialized (schema=dbos, app_version=dazense-agent-dev, service=dazense-test-orchestrator-idempotency) - pending workflows recovered
+── First call ──
+[llm] WARNING: DAZENSE_LLM_MOCK=true - deterministic canned responses are used, no real LLM calls.
+  plan:           [flight_ops, booking]
+  subagent count: 2
+  decision:       MOCK DECISION: analyzed findings from sub-agents. Recommende...
+  outcomeStored:  true
+
+── Second call (same workflow_id) ──
+  plan:           [flight_ops, booking]
+  subagent count: 2
+  decision:       MOCK DECISION: analyzed findings from sub-agents. Recommende...
+  outcomeStored:  true
+
+── Assertions ──
+  dbos.workflow_status rows for orch-idempotency-1775421056383: 1
+  decision_findings rows for orch-session-idempotency-1775421056383: 2 (expected 2)
+  decision_outcomes rows for orch-session-idempotency-1775421056383: 1
+
+✅ PASS - DBOS deduped the orchestrator workflow; no duplicate side effects
+[dbos] agent runtime shutdown complete

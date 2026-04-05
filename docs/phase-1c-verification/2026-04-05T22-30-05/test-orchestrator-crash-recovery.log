@@ -1,0 +1,22 @@
+🧨 Phase 1c Orchestrator Crash Recovery Test
+Workflow ID: orch-crash-1775421164
+Session ID:  orch-session-crash-1775421164
+
+── Starting harness (long-lived HTTP) ──
+  harness ready
+
+── Phase 1: orchestrator with CRASH_AFTER_STEP=run_subagent_flight_ops ──
+  run 1 exit code: 42 (non-zero expected from crash)
+  ✓ crash hook fired
+  dbos.workflow_status before recovery: PENDING
+
+── Phase 2: re-run orchestrator (DBOS auto-recovery) ──
+  run 2 exit code: 0
+
+── Phase 3: verification ──
+  session_id (from run 1): orch-session-crash-1775421164
+  dbos.workflow_status:        SUCCESS
+  decision_findings (session): 2
+  decision_outcomes (session): 1
+
+✅ PASS - DBOS recovered the orchestrator workflow after crash; exactly-once side effects

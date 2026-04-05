@@ -1,0 +1,5 @@
+=== Phase 1c migration audit ===
+Tool handler getCurrentAuthContext(extra) sites: 14
+Residual getAuthContext() in tools/: 0
+DBOS.runStep sites in harness/src/workflows/: 8
+DBOS.runStep sites in agents/src/workflows/:  6

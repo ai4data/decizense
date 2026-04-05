@@ -186,8 +186,17 @@ CREATE TABLE decision_outcomes (
     parent_workflow_id VARCHAR(100),
     prompt_version VARCHAR(50),
     model_version VARCHAR(100),
+    idempotency_key VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- Phase 1c: server-side idempotency for record_outcome — closes the narrow
+-- crash window between the INSERT and DBOS step-completion checkpoint.
+-- Key is derived from (session_id|question|decision_summary|agents_involved)
+-- so retries of the same logical outcome dedupe without a contract change.
+CREATE UNIQUE INDEX uniq_outcomes_idempotency_key
+    ON decision_outcomes(idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 -- Plan v3 Phase 1b: workflow run log linking DBOS workflow_ids to sessions
 CREATE TABLE decision_workflow_runs (
@@ -237,8 +246,16 @@ CREATE TABLE decision_findings (
     auth_method VARCHAR(20),
     token_hash VARCHAR(16),
     correlation_id VARCHAR(100),
+    idempotency_key VARCHAR(64),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- Phase 1c: server-side idempotency for findings. The harness computes the key
+-- from (session_id, agent_id, finding, confidence, data_sources) so retried
+-- workflow steps produce the same row, not duplicates. MCP contract unchanged.
+CREATE UNIQUE INDEX uniq_findings_idempotency_key
+    ON decision_findings(idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE agent_memory (
     memory_id SERIAL PRIMARY KEY,
