@@ -19,7 +19,7 @@
 
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
 import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
-import { getAuthContext } from '../auth/context.js';
+import { getAuthContext, type AuthContext } from '../auth/context.js';
 
 // ─── Types ───
 
@@ -176,11 +176,18 @@ export function authenticateAgent(agentId: string): AgentIdentity {
 /**
  * Run the full governance pipeline on a query.
  *
- * agent_id is resolved from AuthContext (connection-bound identity).
- * If params.agent_id is passed, it must match AuthContext — this is a
- * defense-in-depth check against tools that accidentally trust caller input.
+ * Identity is resolved from the AuthContext passed in by the caller (the tool
+ * handler), which got it from `getCurrentAuthContext(extra)`. This keeps the
+ * governance engine free of global state and works identically in stdio mode
+ * (singleton context) and HTTP mode (per-session context map).
+ *
+ * For backward compatibility, callers may pass `agent_id` directly instead of
+ * `authContext`; in that case we fall back to the singleton for resolution.
+ * Mismatches between `agent_id` and `authContext.agentId` trigger an identity
+ * mismatch error (defense in depth).
  */
 export async function evaluateGovernance(params: {
+	authContext?: AuthContext;
 	agent_id?: string;
 	sql?: string;
 	tables?: string[];
@@ -193,27 +200,38 @@ export async function evaluateGovernance(params: {
 	const warnings: string[] = [];
 	const blockedColumns: string[] = [];
 
-	// ── Resolve agent_id from AuthContext (authoritative) ──
+	// ── Resolve agent_id ──
 	let agentId: string;
-	try {
-		agentId = getAuthContext().agentId;
+	if (params.authContext) {
+		agentId = params.authContext.agentId;
 		if (params.agent_id && params.agent_id !== agentId) {
 			return {
 				allowed: false,
-				reason: `Identity mismatch: caller passed "${params.agent_id}" but connection is authenticated as "${agentId}"`,
+				reason: `Identity mismatch: caller passed agent_id="${params.agent_id}" but authContext is "${agentId}"`,
 				checks: [{ name: 'authenticate', passed: false, detail: 'identity mismatch' }],
 			};
 		}
-	} catch {
-		// AuthContext not initialized — fall back to params for edge cases
-		if (!params.agent_id) {
-			return {
-				allowed: false,
-				reason: 'No authenticated identity available',
-				checks: [{ name: 'authenticate', passed: false, detail: 'no AuthContext, no agent_id' }],
-			};
+	} else {
+		// Legacy path: no explicit AuthContext, fall back to singleton
+		try {
+			agentId = getAuthContext().agentId;
+			if (params.agent_id && params.agent_id !== agentId) {
+				return {
+					allowed: false,
+					reason: `Identity mismatch: caller passed "${params.agent_id}" but connection is authenticated as "${agentId}"`,
+					checks: [{ name: 'authenticate', passed: false, detail: 'identity mismatch' }],
+				};
+			}
+		} catch {
+			if (!params.agent_id) {
+				return {
+					allowed: false,
+					reason: 'No authenticated identity available',
+					checks: [{ name: 'authenticate', passed: false, detail: 'no AuthContext, no agent_id' }],
+				};
+			}
+			agentId = params.agent_id;
 		}
-		agentId = params.agent_id;
 	}
 
 	// ── 1. Authenticate agent ──

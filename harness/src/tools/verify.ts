@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getCatalogClient } from '../catalog/index.js';
-import { getAuthContext } from '../auth/context.js';
+import { getCurrentAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -31,8 +31,8 @@ export function registerVerifyTools(server: McpServer) {
 			sql_used: z.string().optional().describe('The SQL query that produced the result'),
 			measures_used: z.array(z.string()).optional().describe('Measures used'),
 		},
-		async ({ question, result_summary, sql_used, measures_used }) => {
-			const agent_id = getAuthContext().agentId;
+		async ({ question, result_summary, sql_used, measures_used }, extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId;
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
@@ -215,8 +215,8 @@ export function registerVerifyTools(server: McpServer) {
 			result_summary: z.string().describe('The result to check'),
 			applicable_rules: z.array(z.string()).optional().describe('Rules to check against'),
 		},
-		async ({ result_summary, applicable_rules }) => {
-			const agent_id = getAuthContext().agentId;
+		async ({ result_summary, applicable_rules }, extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId;
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
