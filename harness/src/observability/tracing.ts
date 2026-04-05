@@ -101,7 +101,7 @@ export function getTracer(): Tracer {
 /**
  * Extract trace context from the TRACEPARENT env var (stdio transport).
  * Called once at startup to link the harness process's root span to the
- * parent agent's span.
+ * parent agent's span when running as a child process.
  *
  * Returns the parent context, or ROOT_CONTEXT if no parent is present.
  */
@@ -120,9 +120,34 @@ export function extractParentContext(): ReturnType<typeof propagation.extract> {
 }
 
 /**
- * Returns the captured parent context (from env at startup) so tool handlers
- * can create spans that become children of the agent's root span. Falls back
- * to the current active context if no parent was captured.
+ * Extract trace context from HTTP-style headers (Phase 1a, HTTP transport).
+ * Called per tool invocation with headers from `extra.requestInfo.headers` so
+ * every request joins its agent-side root span.
+ *
+ * Returns the parent context, or undefined if no traceparent header is present.
+ */
+export function extractParentContextFromHeaders(
+	headers: Record<string, string | string[] | undefined> | undefined,
+): ReturnType<typeof context.active> | undefined {
+	if (!headers) return undefined;
+
+	const carrier: Record<string, string> = {};
+	// Header lookup is case-insensitive per HTTP spec; the MCP SDK lower-cases them.
+	const tp = headers['traceparent'];
+	const ts = headers['tracestate'];
+	if (typeof tp === 'string') carrier.traceparent = tp;
+	else if (Array.isArray(tp) && tp.length > 0) carrier.traceparent = tp[0];
+	if (typeof ts === 'string') carrier.tracestate = ts;
+	else if (Array.isArray(ts) && ts.length > 0) carrier.tracestate = ts[0];
+
+	if (!carrier.traceparent) return undefined;
+	return propagation.extract(context.active(), carrier);
+}
+
+/**
+ * Returns the captured parent context (from env at startup — stdio mode only).
+ * In HTTP mode, callers should prefer `extractParentContextFromHeaders(extra.requestInfo.headers)`
+ * for per-request context. Falls back to the current active context.
  */
 export function getParentContext(): ReturnType<typeof context.active> {
 	return capturedParentContext ?? context.active();

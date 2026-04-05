@@ -1,13 +1,19 @@
 /**
- * AuthContext — immutable identity for the current connection.
+ * AuthContext — identity bound to a connection.
  *
- * Resolved once at harness startup from AGENT_TOKEN (env var).
- * Every tool call reads identity from here, never from model input.
+ * Plan v2 (stdio mode): one harness child process per agent; AuthContext is
+ * a module-level singleton resolved once from AGENT_TOKEN env var.
  *
- * The token never appears in tool schemas — the model cannot see or leak it.
+ * Plan v3 Phase 1a (HTTP mode): one long-lived harness serves many agents
+ * concurrently; AuthContext is stored in a Map keyed by MCP session ID, with
+ * TTL and cleanup on disconnect.
+ *
+ * Both modes coexist during the transition. Tools call `getCurrentAuthContext(extra)`
+ * which resolves from `extra.sessionId` in HTTP mode or falls back to the
+ * singleton in stdio mode. Tokens are NEVER logged — only the SHA-256 hash.
  */
 
-import type { ScenarioLoader } from '../config/index.js';
+import type { ScenarioLoader, AuthConfig } from '../config/index.js';
 import { createVerifier, tokenHash, type VerifyConfig } from './verify.js';
 
 /**
@@ -33,28 +39,131 @@ export interface AuthContext {
 	tokenIssuer: string | null;
 	tokenHash: string | null;
 
-	// Session (set later by initialize_agent)
+	// Session correlation
 	sessionId: string | null;
 	authenticatedAt: Date;
 }
 
-let context: AuthContext | null = null;
+// ─── Singleton path (stdio mode, Plan v2 backward compat) ───
+
+let singletonContext: AuthContext | null = null;
 
 export function getAuthContext(): AuthContext {
-	if (!context) throw new Error('AuthContext not initialized — call resolveAuthContext() at startup');
-	return context;
+	if (!singletonContext) throw new AuthError('AuthContext not initialized — call resolveAuthContext() at startup');
+	return singletonContext;
 }
 
 export function setSessionId(sessionId: string): void {
-	if (!context) throw new Error('AuthContext not initialized');
-	context = { ...context, sessionId };
+	if (!singletonContext) throw new AuthError('AuthContext not initialized');
+	singletonContext = { ...singletonContext, sessionId };
 }
 
 /**
- * Resolve the AuthContext for this connection.
+ * Set the agent_id on a config-only singleton context (called by initialize_agent
+ * when no AGENT_ID env var was set — stdio backward compat path only).
+ */
+export function setAgentIdIfEmpty(agentId: string, trustDomain: string): void {
+	if (!singletonContext) throw new AuthError('AuthContext not initialized');
+	if (singletonContext.agentId === '') {
+		singletonContext = {
+			...singletonContext,
+			agentId,
+			agentUri: `agent://${trustDomain}/${agentId}`,
+		};
+	}
+}
+
+// ─── Session map (HTTP mode, Plan v3 Phase 1a) ───
+
+interface StoredSession {
+	context: AuthContext;
+	expiresAt: number;
+}
+
+const sessionMap = new Map<string, StoredSession>();
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+let gcInterval: NodeJS.Timeout | null = null;
+
+/**
+ * Register an AuthContext for a new MCP session (HTTP mode).
+ * Called by the HTTP transport layer when a session is established.
+ */
+export function setSessionAuthContext(sessionId: string, ctx: AuthContext): void {
+	sessionMap.set(sessionId, {
+		context: { ...ctx, sessionId },
+		expiresAt: Date.now() + SESSION_TTL_MS,
+	});
+	startSessionGcIfNeeded();
+}
+
+/**
+ * Remove a session's AuthContext (on disconnect).
+ */
+export function deleteSessionAuthContext(sessionId: string): void {
+	sessionMap.delete(sessionId);
+}
+
+/**
+ * Resolve AuthContext for the current tool call.
+ *
+ * In HTTP mode, pass the `extra` parameter from the MCP tool handler — the
+ * session ID comes from `extra.sessionId`. Returns the per-session context.
+ *
+ * In stdio mode, `extra` may be undefined or lack a sessionId; in that case
+ * returns the singleton context for backward compatibility with Plan v2.
+ */
+export function getCurrentAuthContext(extra?: { sessionId?: string }): AuthContext {
+	const sessionId = extra?.sessionId;
+	if (sessionId) {
+		const stored = sessionMap.get(sessionId);
+		if (stored) {
+			if (stored.expiresAt > Date.now()) {
+				return stored.context;
+			}
+			// Expired — evict and fall through to error
+			sessionMap.delete(sessionId);
+			throw new AuthError(`Session ${sessionId} has expired`);
+		}
+		// HTTP mode but no session registered → fall through to singleton (stdio fallback)
+		// or throw if neither exists
+	}
+	if (singletonContext) return singletonContext;
+	throw new AuthError('No AuthContext for this request — neither per-session nor singleton');
+}
+
+/**
+ * Session count (for tests and health endpoints).
+ */
+export function sessionAuthContextCount(): number {
+	return sessionMap.size;
+}
+
+/**
+ * Periodic GC for expired sessions.
+ */
+function startSessionGcIfNeeded(): void {
+	if (gcInterval) return;
+	gcInterval = setInterval(() => {
+		const now = Date.now();
+		for (const [id, stored] of sessionMap.entries()) {
+			if (stored.expiresAt <= now) sessionMap.delete(id);
+		}
+		if (sessionMap.size === 0 && gcInterval) {
+			clearInterval(gcInterval);
+			gcInterval = null;
+		}
+	}, 60 * 1000);
+	// Don't keep the process alive just for GC
+	gcInterval.unref?.();
+}
+
+// ─── Resolution (token verification + claim mapping) ───
+
+/**
+ * Resolve the singleton AuthContext at startup (stdio mode).
  *
  * In jwt mode: reads AGENT_TOKEN from env, verifies it, maps sub → agent_id.
- * In config-only mode: reads AGENT_ID from env (or defaults to first agent).
+ * In config-only mode: reads AGENT_ID from env (or defaults to empty placeholder).
  */
 export async function resolveAuthContext(loader: ScenarioLoader): Promise<AuthContext> {
 	const scenario = loader.scenario;
@@ -63,24 +172,28 @@ export async function resolveAuthContext(loader: ScenarioLoader): Promise<AuthCo
 	const trustDomain = authConfig?.trust_domain ?? 'dazense.local';
 
 	if (mode === 'jwt') {
-		context = await resolveJwtContext(loader, authConfig!, trustDomain);
+		const token = process.env.AGENT_TOKEN;
+		if (!token) {
+			throw new AuthError('AUTH_MODE=jwt but AGENT_TOKEN environment variable is not set');
+		}
+		singletonContext = await verifyAndBuildContext(loader, authConfig!, trustDomain, token);
 	} else {
-		context = resolveConfigOnlyContext(loader, trustDomain);
+		singletonContext = resolveConfigOnlyContext(loader, trustDomain);
 	}
 
-	return context;
+	return singletonContext;
 }
 
-async function resolveJwtContext(
+/**
+ * Verify a token + build an AuthContext from it (used by both singleton
+ * startup and per-request HTTP authentication).
+ */
+export async function verifyAndBuildContext(
 	loader: ScenarioLoader,
-	authConfig: NonNullable<ReturnType<typeof getAuthConfig>>,
+	authConfig: AuthConfig,
 	trustDomain: string,
+	token: string,
 ): Promise<AuthContext> {
-	const token = process.env.AGENT_TOKEN;
-	if (!token) {
-		throw new AuthError('AUTH_MODE=jwt but AGENT_TOKEN environment variable is not set');
-	}
-
 	const verifyConfig: VerifyConfig = {
 		strategy: authConfig.verify_strategy ?? 'shared_secret',
 		jwtSecret: authConfig.jwt_secret,
@@ -95,12 +208,10 @@ async function resolveJwtContext(
 	if (!result.valid) {
 		throw new AuthError(`Agent token verification failed: ${result.error}`);
 	}
-
 	if (!result.sub) {
 		throw new AuthError('Agent token missing sub claim — cannot determine agent identity');
 	}
 
-	// Map sub claim (catalog_bot name) → agent_id
 	const agentId = resolveAgentIdFromSubject(loader, result.sub);
 	if (!agentId) {
 		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
@@ -118,29 +229,16 @@ async function resolveJwtContext(
 	};
 }
 
-function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): AuthContext {
-	const agentId = process.env.AGENT_ID;
-	if (!agentId) {
-		// No AGENT_ID set — context will be set by first initialize_agent call
-		// For backward compat, create a placeholder that gets replaced
-		return {
-			agentId: '',
-			agentUri: '',
-			authMethod: 'config-only',
-			tokenSubject: null,
-			tokenIssuer: null,
-			tokenHash: null,
-			sessionId: null,
-			authenticatedAt: new Date(),
-		};
-	}
-
-	// Verify agent exists in config
+/**
+ * Build a config-only AuthContext for an agent_id that exists in agents.yml
+ * (used by HTTP mode when a request carries X-Agent-Id and auth.mode=config-only
+ * on localhost with the explicit ack flag).
+ */
+export function buildConfigOnlyContext(loader: ScenarioLoader, agentId: string, trustDomain: string): AuthContext {
 	const agents = loader.agents;
 	if (!agents.agents[agentId]) {
-		throw new AuthError(`AGENT_ID="${agentId}" not found in agents.yml`);
+		throw new AuthError(`Unknown agent: "${agentId}" not in agents.yml`);
 	}
-
 	return {
 		agentId,
 		agentUri: `agent://${trustDomain}/${agentId}`,
@@ -153,19 +251,22 @@ function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): 
 	};
 }
 
-/**
- * Set the agent_id on a config-only context (called by initialize_agent
- * when no AGENT_ID env var was set — backward compat path).
- */
-export function setAgentIdIfEmpty(agentId: string, trustDomain: string): void {
-	if (!context) throw new Error('AuthContext not initialized');
-	if (context.agentId === '') {
-		context = {
-			...context,
-			agentId,
-			agentUri: `agent://${trustDomain}/${agentId}`,
+function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): AuthContext {
+	const agentId = process.env.AGENT_ID;
+	if (!agentId) {
+		// stdio mode placeholder — set later by first initialize_agent call
+		return {
+			agentId: '',
+			agentUri: '',
+			authMethod: 'config-only',
+			tokenSubject: null,
+			tokenIssuer: null,
+			tokenHash: null,
+			sessionId: null,
+			authenticatedAt: new Date(),
 		};
 	}
+	return buildConfigOnlyContext(loader, agentId, trustDomain);
 }
 
 /**
@@ -179,20 +280,4 @@ function resolveAgentIdFromSubject(loader: ScenarioLoader, subject: string): str
 		}
 	}
 	return null;
-}
-
-// Helper to extract auth config type
-function getAuthConfig() {
-	return undefined as
-		| {
-				mode: string;
-				trust_domain?: string;
-				verify_strategy?: 'jwks' | 'shared_secret' | 'introspection';
-				jwt_secret?: string;
-				jwks_uri?: string;
-				issuer?: string;
-				audience?: string;
-				introspection_url?: string;
-		  }
-		| undefined;
 }

@@ -1,0 +1,16 @@
+🔐 Auth Verification Test
+
+── Test 1: wrong agent_id at initialize_agent (should REJECT) ──
+✓ Rejected: agent_id "booking" does not match authenticated identity "flight_ops"
+
+── Test 2: correct agent_id (should PASS) ──
+✓ Authenticated: Flight Operations Agent
+  auth_method: config-only
+  agent_uri: agent://dazense.local/flight_ops
+
+── Test 3: write_finding persists audit fields ──
+✓ Finding stored: finding_id=26
+
+✅ Test suite complete — check DB for audit fields:
+   SELECT finding_id, agent_id, auth_method, token_hash, correlation_id
+   FROM decision_findings WHERE session_id = 'test-auth-002';

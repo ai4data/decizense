@@ -13,7 +13,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ScenarioLoader } from '../config/index.js';
 import { authenticateAgent } from '../governance/index.js';
-import { getAuthContext, setAgentIdIfEmpty, setSessionId } from '../auth/context.js';
+import { getCurrentAuthContext, setAgentIdIfEmpty, setSessionId } from '../auth/context.js';
 import { setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
@@ -38,7 +38,7 @@ export function registerControlTools(server: McpServer) {
 			session_id: z.string().describe('Current decision session ID'),
 			question: z.string().optional().describe('The question this agent is working on'),
 		},
-		async ({ agent_id, session_id, question }) => {
+		async ({ agent_id, session_id, question }, extra) => {
 			const span = getActiveSpan();
 			if (span) {
 				span.setAttribute('dazense.requested_agent_id', agent_id);
@@ -53,11 +53,12 @@ export function registerControlTools(server: McpServer) {
 			}
 
 			// ── AuthContext validation ──
-			const authCtx = getAuthContext();
+			const authCtx = getCurrentAuthContext(extra);
 			const trustDomain = loader.scenario.auth?.trust_domain ?? 'dazense.local';
 
 			if (authCtx.agentId === '') {
-				// config-only mode without AGENT_ID env — set from first initialize_agent call
+				// stdio mode without AGENT_ID env — set on the singleton from the first initialize_agent call.
+				// HTTP mode would never reach this branch because the transport middleware pre-populates the session context.
 				setAgentIdIfEmpty(agent_id, trustDomain);
 			} else if (authCtx.agentId !== agent_id) {
 				return {
@@ -72,8 +73,14 @@ export function registerControlTools(server: McpServer) {
 				};
 			}
 
-			// Bind session to auth context
-			setSessionId(session_id);
+			// Bind the app-level session_id to the singleton auth context (stdio compat).
+			// In HTTP mode this is a no-op relative to the per-session map; the map is keyed
+			// on MCP extra.sessionId, which is distinct from the app-level session_id arg.
+			try {
+				setSessionId(session_id);
+			} catch {
+				/* HTTP mode — no singleton to update */
+			}
 
 			// ── Identity ──
 			const identity = authenticateAgent(agent_id);
@@ -89,7 +96,7 @@ export function registerControlTools(server: McpServer) {
 			}
 
 			// Now that identity is resolved, attach auth attributes to the active span
-			if (span) setAuthAttributes(span, getAuthContext());
+			if (span) setAuthAttributes(span, authCtx);
 
 			const agentsConfig = loader.agents;
 			const agentConfig = agentsConfig.agents[agent_id];
@@ -164,8 +171,8 @@ export function registerControlTools(server: McpServer) {
 									role: agentConfig.role,
 									display_name: agentConfig.display_name,
 									authenticated: true,
-									agent_uri: getAuthContext().agentUri,
-									auth_method: getAuthContext().authMethod,
+									agent_uri: authCtx.agentUri,
+									auth_method: authCtx.authMethod,
 								},
 								system_prompt: agentConfig.system_prompt ?? '',
 								scope: {

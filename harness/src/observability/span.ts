@@ -12,7 +12,7 @@
 import { SpanStatusCode, context, trace, type Span, type SpanOptions } from '@opentelemetry/api';
 import { createHash } from 'crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getTracer, getParentContext } from './tracing.js';
+import { getTracer, getParentContext, extractParentContextFromHeaders } from './tracing.js';
 
 /**
  * Wrap an async tool handler in a span. Automatically:
@@ -24,11 +24,13 @@ export async function withToolSpan<T>(
 	toolName: string,
 	fn: (span: Span) => Promise<T>,
 	options?: SpanOptions,
+	parentCtx?: ReturnType<typeof context.active>,
 ): Promise<T> {
 	const tracer = getTracer();
-	// Use the captured parent context (from TRACEPARENT env var) so this
-	// span becomes a child of the agent's root span, not a new trace root.
-	return tracer.startActiveSpan(`dazense.tool.${toolName}`, options ?? {}, getParentContext(), async (span) => {
+	// parentCtx (per-request) wins in HTTP mode; falls back to startup-captured
+	// env-var context in stdio mode.
+	const ctx = parentCtx ?? getParentContext();
+	return tracer.startActiveSpan(`dazense.tool.${toolName}`, options ?? {}, ctx, async (span) => {
 		try {
 			span.setAttribute('dazense.tool.name', toolName);
 			const result = await fn(span);
@@ -88,7 +90,15 @@ export function installToolTracing(server: McpServer): void {
 		}
 		const originalHandler = handler as (...hargs: unknown[]) => Promise<unknown>;
 		const wrappedHandler = async (...hargs: unknown[]) => {
-			return withToolSpan(toolName, async () => originalHandler(...hargs));
+			// The MCP SDK passes `extra` as the last argument to every tool handler.
+			// Extract the incoming `traceparent` HTTP header (Phase 1a) so this
+			// span becomes a child of the agent's root span across the HTTP boundary.
+			const extra = hargs[hargs.length - 1] as
+				| { requestInfo?: { headers?: Record<string, string | string[] | undefined> } }
+				| undefined;
+			const headers = extra?.requestInfo?.headers;
+			const parentCtx = extractParentContextFromHeaders(headers);
+			return withToolSpan(toolName, async () => originalHandler(...hargs), undefined, parentCtx);
 		};
 		return originalTool(...args.slice(0, -1), wrappedHandler);
 	};

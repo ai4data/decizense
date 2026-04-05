@@ -1,0 +1,18 @@
+=== Tool handler migration audit ===
+Call sites using getCurrentAuthContext(extra): 13
+Residual getAuthContext() calls in tools/: 0
+
+Per-file breakdown:
+harness/src/tools/action.ts:40:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/action.ts:148:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/action.ts:209:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/action.ts:367:			const agent_id = getCurrentAuthContext(extra).agentId;
+harness/src/tools/context.ts:37:			const agent_id = getCurrentAuthContext(extra).agentId || 'unknown';
+harness/src/tools/control.ts:56:			const authCtx = getCurrentAuthContext(extra);
+harness/src/tools/persist.ts:37:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/persist.ts:161:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/persist.ts:477:			const ctx = getCurrentAuthContext(extra);
+harness/src/tools/persist.ts:624:			const agent_id = getCurrentAuthContext(extra).agentId;
+harness/src/tools/persist.ts:671:			const agent_id = getCurrentAuthContext(extra).agentId;
+harness/src/tools/verify.ts:35:			const agent_id = getCurrentAuthContext(extra).agentId;
+harness/src/tools/verify.ts:219:			const agent_id = getCurrentAuthContext(extra).agentId;

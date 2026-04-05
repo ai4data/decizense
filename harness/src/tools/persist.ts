@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { filterPiiFromFinding } from '../governance/index.js';
-import { getAuthContext } from '../auth/context.js';
+import { getCurrentAuthContext } from '../auth/context.js';
 import { setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
@@ -33,8 +33,8 @@ export function registerPersistTools(server: McpServer) {
 			confidence: z.enum(['high', 'medium', 'low']).describe('Confidence in this finding'),
 			data_sources: z.array(z.string()).optional().describe('Tables/measures used'),
 		},
-		async ({ session_id, finding, confidence, data_sources }) => {
-			const ctx = getAuthContext();
+		async ({ session_id, finding, confidence, data_sources }, extra) => {
+			const ctx = getCurrentAuthContext(extra);
 			const agent_id = ctx.agentId;
 			const span = getActiveSpan();
 			if (span) {
@@ -146,16 +146,19 @@ export function registerPersistTools(server: McpServer) {
 			evidence_signal_types: z.array(z.string()).optional().describe('Process signal types that informed this'),
 			evidence_rules: z.array(z.string()).optional().describe('Business rules that apply'),
 		},
-		async ({
-			session_id,
-			proposed_action,
-			confidence,
-			risk_class,
-			evidence_event_ids,
-			evidence_signal_types,
-			evidence_rules,
-		}) => {
-			const ctx = getAuthContext();
+		async (
+			{
+				session_id,
+				proposed_action,
+				confidence,
+				risk_class,
+				evidence_event_ids,
+				evidence_signal_types,
+				evidence_rules,
+			},
+			extra,
+		) => {
+			const ctx = getCurrentAuthContext(extra);
 			const agent_id = ctx.agentId;
 			try {
 				// Validate evidence links before storing
@@ -455,20 +458,23 @@ export function registerPersistTools(server: McpServer) {
 			evidence_signal_types: z.array(z.string()).optional().describe('Process signals used'),
 			evidence_proposal_ids: z.array(z.number()).optional().describe('Proposal IDs in this decision'),
 		},
-		async ({
-			session_id,
-			question,
-			decision_summary,
-			reasoning,
-			confidence,
-			agents_involved,
-			cost_usd,
-			evidence_event_ids,
-			evidence_rules,
-			evidence_signal_types,
-			evidence_proposal_ids,
-		}) => {
-			const ctx = getAuthContext();
+		async (
+			{
+				session_id,
+				question,
+				decision_summary,
+				reasoning,
+				confidence,
+				agents_involved,
+				cost_usd,
+				evidence_event_ids,
+				evidence_rules,
+				evidence_signal_types,
+				evidence_proposal_ids,
+			},
+			extra,
+		) => {
+			const ctx = getCurrentAuthContext(extra);
 			try {
 				// Validate evidence links
 				const validationErrors: string[] = [];
@@ -614,8 +620,8 @@ export function registerPersistTools(server: McpServer) {
 			key: z.string().describe('Memory key (topic or category)'),
 			content: z.string().describe('Memory content to persist'),
 		},
-		async ({ key, content }) => {
-			const agent_id = getAuthContext().agentId;
+		async ({ key, content }, extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId;
 			try {
 				const safeContent = filterPiiFromFinding(content);
 				await executeQuery(
@@ -661,8 +667,8 @@ export function registerPersistTools(server: McpServer) {
 				.default('all')
 				.describe('Scope filter for structured memories'),
 		},
-		async ({ key, scope }) => {
-			const agent_id = getAuthContext().agentId;
+		async ({ key, scope }, extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId;
 			try {
 				// Legacy KV memory
 				let legacySql: string;
