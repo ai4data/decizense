@@ -16,11 +16,12 @@ async function main() {
 	console.log(`\n🛫 Flight Operations Agent`);
 	console.log(`Question: "${question}"\n`);
 
-	const harness = new HarnessClient();
+	const token = process.env.OPS_TOKEN;
+	const harness = new HarnessClient(AGENT_ID, token);
 	await harness.connect('../scenario/travel');
 
-	const init = (await harness.initializeAgent(AGENT_ID, sessionId, question)) as any;
-	console.log(`Identity: ${init.identity.display_name}`);
+	const init = (await harness.initializeAgent(sessionId, question)) as any;
+	console.log(`Identity: ${init.identity.display_name} (${init.identity.auth_method})`);
 	console.log(`Tables: ${init.scope.tables.join(', ')}\n`);
 
 	const rules = (await harness.getBusinessRules(['flights', 'flight_delays'])) as any;
@@ -36,12 +37,12 @@ ONLY query tables in your bundle. Respond with a clear finding.`;
 
 	const answer = await callLLM(systemPrompt, question, async (sql: string, reason: string) => {
 		console.log(`  📊 ${sql.substring(0, 80)}...`);
-		return await harness.queryData(AGENT_ID, sql, reason);
+		return await harness.queryData(sql, reason);
 	});
 
 	console.log(`\n📋 Answer: ${answer.substring(0, 200)}`);
 
-	await harness.writeFinding(sessionId, AGENT_ID, answer, 'high', ['flights', 'flight_delays']);
+	await harness.writeFinding(sessionId, answer, 'high', ['flights', 'flight_delays']);
 	console.log('✅ Finding written');
 
 	await harness.close();
