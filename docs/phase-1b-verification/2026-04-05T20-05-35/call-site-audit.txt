@@ -1,0 +1,4 @@
+=== Phase 1b migration audit ===
+Tool handler getCurrentAuthContext(extra) sites: 14
+Residual getAuthContext() in tools/: 0
+DBOS.runStep call sites in workflows/: 8

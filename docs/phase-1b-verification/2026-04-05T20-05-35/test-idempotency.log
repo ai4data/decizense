@@ -1,0 +1,18 @@
+🔁 Phase 1b Idempotency Test
+
+Workflow ID: wf-idempotency-1775412381895
+Session ID:  sess-idempotency-1775412381895
+
+── First call ──
+  status:     completed
+  outcome_id: 14
+  proposal_id:13
+
+── Second call (same workflow_id, new MCP session) ──
+  status:     completed
+  outcome_id: 14
+  proposal_id:13
+
+── Assertions ──
+✅ PASS — both calls returned the same outcome_id (workflow deduped by DBOS)
+   workflow_id=wf-idempotency-1775412381895 outcome_id=14
