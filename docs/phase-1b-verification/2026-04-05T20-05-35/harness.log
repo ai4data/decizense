@@ -1,0 +1,24 @@
+[tracing] OpenTelemetry initialized → http://localhost:4318/v1/traces
+[harness] Loading scenario from: ../scenario/travel
+[harness] Scenario: SkyJet Travel Operations (travel)
+[harness] Database: postgresql://localhost:5433/travel_db
+[catalog] Provider: openmetadata
+[harness] Catalog: connected (http://localhost:8585)
+[harness] Agents: orchestrator, flight_ops, booking, customer_service
+[harness] Policy: 4 PII columns blocked, max 500 rows
+[harness] WARNING: config-only auth in HTTP mode is insecure — localhost only, dev only.
+Initializing DBOS (v4.13.5)
+System Database URL: postgres://travel_admin:***@localhost:5433/travel_db
+Executor ID: local
+Application version: dazense-dev
+No workflows to recover from application version dazense-dev
+DBOS launched!
+[dbos] initialized (schema=dbos, app_version=dazense-dev) — pending workflows recovered
+[harness] HTTP transport listening on http://127.0.0.1:9080/mcp
+[harness] session open: 441d6ed6… agent=flight_ops method=config-only
+[harness] session open: 106b5932… agent=flight_ops method=config-only
+[harness] session open: 453253c8… agent=flight_ops method=config-only
+[harness] session open: 35e56dc3… agent=flight_ops method=config-only
+[harness] session open: c6976833… agent=booking method=config-only
+[harness] session open: b6708f9b… agent=flight_ops method=config-only
+[harness] session open: 3a04d124… agent=flight_ops method=config-only
