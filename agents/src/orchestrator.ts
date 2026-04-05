@@ -16,6 +16,7 @@
 
 import { HarnessClient } from './harness-client.js';
 import { callLLM } from './llm.js';
+import { runWithRootSpan } from './tracing.js';
 
 const SESSION_ID = `session-${Date.now()}`;
 
@@ -69,46 +70,55 @@ async function main() {
 	console.log(`\n🎯 Orchestrator`);
 	console.log(`Question: "${question}"\n`);
 
-	// ── Step 1: Get context from harness ──
-	console.log('Step 1: Getting context...');
-	const token = process.env.ORCHESTRATOR_TOKEN;
-	const harness = new HarnessClient('orchestrator', token);
-	await harness.connect('../scenario/travel');
+	await runWithRootSpan(
+		'dazense-agent-orchestrator',
+		'orchestrator.run',
+		{
+			'dazense.agent.id': 'orchestrator',
+			'dazense.session.id': SESSION_ID,
+			'dazense.question.length': question.length,
+		},
+		async () => {
+			// ── Step 1: Get context from harness ──
+			console.log('Step 1: Getting context...');
+			const token = process.env.ORCHESTRATOR_TOKEN;
+			const harness = new HarnessClient('orchestrator', token);
+			await harness.connect('../scenario/travel');
 
-	const context = (await harness.callTool('get_context', { question })) as any;
+			const context = (await harness.callTool('get_context', { question })) as any;
 
-	const glossaryTerms = context.matched_glossary_terms ?? [];
-	if (glossaryTerms.length > 0) {
-		console.log(`  Glossary matches: ${glossaryTerms.map((t: any) => t.name).join(', ')}`);
-	}
+			const glossaryTerms = context.matched_glossary_terms ?? [];
+			if (glossaryTerms.length > 0) {
+				console.log(`  Glossary matches: ${glossaryTerms.map((t: any) => t.name).join(', ')}`);
+			}
 
-	// ── Step 2: Plan — which agents to involve ──
-	console.log('\nStep 2: Planning...');
+			// ── Step 2: Plan — which agents to involve ──
+			console.log('\nStep 2: Planning...');
 
-	const orchestratorInit = (await harness.initializeAgent(SESSION_ID, question)) as any;
-	const delegateTo = orchestratorInit.constraints?.can_delegate_to ?? [];
+			const orchestratorInit = (await harness.initializeAgent(SESSION_ID, question)) as any;
+			const delegateTo = orchestratorInit.constraints?.can_delegate_to ?? [];
 
-	// Get agent details for planning prompt (each needs its own connection)
-	const agentDescriptions: string[] = [];
-	for (const agentId of delegateTo) {
-		const tokenEnvMap: Record<string, string> = {
-			flight_ops: 'OPS_TOKEN',
-			booking: 'BOOKING_TOKEN',
-			customer_service: 'CUSTOMER_TOKEN',
-		};
-		const agentToken = process.env[tokenEnvMap[agentId] ?? ''];
-		const agentHarness = new HarnessClient(agentId, agentToken);
-		await agentHarness.connect('../scenario/travel');
-		const agentInit = (await agentHarness.initializeAgent(SESSION_ID)) as any;
-		if (agentInit.identity?.authenticated) {
-			const tables = agentInit.scope?.tables?.join(', ') ?? 'none';
-			agentDescriptions.push(`- ${agentId}: ${agentInit.identity.display_name} (tables: ${tables})`);
-		}
-		await agentHarness.close();
-	}
+			// Get agent details for planning prompt (each needs its own connection)
+			const agentDescriptions: string[] = [];
+			for (const agentId of delegateTo) {
+				const tokenEnvMap: Record<string, string> = {
+					flight_ops: 'OPS_TOKEN',
+					booking: 'BOOKING_TOKEN',
+					customer_service: 'CUSTOMER_TOKEN',
+				};
+				const agentToken = process.env[tokenEnvMap[agentId] ?? ''];
+				const agentHarness = new HarnessClient(agentId, agentToken);
+				await agentHarness.connect('../scenario/travel');
+				const agentInit = (await agentHarness.initializeAgent(SESSION_ID)) as any;
+				if (agentInit.identity?.authenticated) {
+					const tables = agentInit.scope?.tables?.join(', ') ?? 'none';
+					agentDescriptions.push(`- ${agentId}: ${agentInit.identity.display_name} (tables: ${tables})`);
+				}
+				await agentHarness.close();
+			}
 
-	// Use LLM to decompose the question into sub-tasks
-	const planPrompt = `You are an orchestrator that decomposes complex questions.
+			// Use LLM to decompose the question into sub-tasks
+			const planPrompt = `You are an orchestrator that decomposes complex questions.
 Given a question, decide which domain agents to involve and what each should investigate.
 
 Available agents:
@@ -121,43 +131,43 @@ Respond ONLY with a JSON object like:
 
 Include only agents that are needed. Be specific in sub-questions.`;
 
-	const planResponse = await callLLM(planPrompt, 'Plan the investigation', async () => ({}));
+			const planResponse = await callLLM(planPrompt, 'Plan the investigation', async () => ({}));
 
-	let plan: Array<{ id: string; sub_question: string }>;
-	try {
-		const jsonMatch = planResponse.match(/\{[\s\S]*\}/);
-		const parsed = JSON.parse(jsonMatch?.[0] ?? '{"agents": []}');
-		plan = parsed.agents;
-	} catch {
-		// Default plan if LLM doesn't return valid JSON
-		plan = [
-			{ id: 'flight_ops', sub_question: question },
-			{ id: 'booking', sub_question: question },
-		];
-	}
+			let plan: Array<{ id: string; sub_question: string }>;
+			try {
+				const jsonMatch = planResponse.match(/\{[\s\S]*\}/);
+				const parsed = JSON.parse(jsonMatch?.[0] ?? '{"agents": []}');
+				plan = parsed.agents;
+			} catch {
+				// Default plan if LLM doesn't return valid JSON
+				plan = [
+					{ id: 'flight_ops', sub_question: question },
+					{ id: 'booking', sub_question: question },
+				];
+			}
 
-	console.log(`  Plan: ${plan.map((a) => `${a.id} → "${a.sub_question.substring(0, 50)}..."`).join(', ')}`);
+			console.log(`  Plan: ${plan.map((a) => `${a.id} → "${a.sub_question.substring(0, 50)}..."`).join(', ')}`);
 
-	// ── Step 3: Run domain agents ──
-	console.log('\nStep 3: Running domain agents...');
-	const agentResults: Array<{ id: string; answer: string }> = [];
+			// ── Step 3: Run domain agents ──
+			console.log('\nStep 3: Running domain agents...');
+			const agentResults: Array<{ id: string; answer: string }> = [];
 
-	for (const agent of plan) {
-		console.log(`\n  --- ${agent.id} ---`);
-		const answer = await runDomainAgent(agent.id, agent.sub_question, SESSION_ID);
-		agentResults.push({ id: agent.id, answer });
-		console.log(`  Finding: ${answer.substring(0, 100)}...`);
-	}
+			for (const agent of plan) {
+				console.log(`\n  --- ${agent.id} ---`);
+				const answer = await runDomainAgent(agent.id, agent.sub_question, SESSION_ID);
+				agentResults.push({ id: agent.id, answer });
+				console.log(`  Finding: ${answer.substring(0, 100)}...`);
+			}
 
-	// ── Step 4: Read all findings ──
-	console.log('\nStep 4: Reading findings...');
-	const findings = (await harness.callTool('read_findings', { session_id: SESSION_ID })) as any;
-	console.log(`  Total findings: ${findings.total ?? findings.findings?.length ?? 0}`);
+			// ── Step 4: Read all findings ──
+			console.log('\nStep 4: Reading findings...');
+			const findings = (await harness.callTool('read_findings', { session_id: SESSION_ID })) as any;
+			console.log(`  Total findings: ${findings.total ?? findings.findings?.length ?? 0}`);
 
-	// ── Step 5: Combine into decision ──
-	console.log('\nStep 5: Combining into decision...');
+			// ── Step 5: Combine into decision ──
+			console.log('\nStep 5: Combining into decision...');
 
-	const combinePrompt = `You are an orchestrator combining findings from multiple agents into a final decision.
+			const combinePrompt = `You are an orchestrator combining findings from multiple agents into a final decision.
 
 Original question: "${question}"
 
@@ -172,33 +182,35 @@ Provide a clear, actionable decision. Include:
 3. Confidence level (high/medium/low) and why
 4. Recommended next action if any`;
 
-	const decision = await callLLM(combinePrompt, 'Combine findings into a decision', async () => ({}));
+			const decision = await callLLM(combinePrompt, 'Combine findings into a decision', async () => ({}));
 
-	// ── Step 6: Record outcome ──
-	console.log('\nStep 6: Recording outcome...');
+			// ── Step 6: Record outcome ──
+			console.log('\nStep 6: Recording outcome...');
 
-	await harness.callTool('record_outcome', {
-		session_id: SESSION_ID,
-		question,
-		decision_summary: decision.substring(0, 500),
-		reasoning: `Combined findings from ${agentResults.map((r) => r.id).join(', ')}. ${glossaryTerms.length} glossary terms matched.`,
-		confidence: 'high',
-		agents_involved: agentResults.map((r) => r.id),
-		cost_usd: 0.15,
-		evidence_rules: ['checkin_window', 'rebooking_priority_connections'],
-		evidence_signal_types: ['delay_patterns'],
-	});
+			await harness.callTool('record_outcome', {
+				session_id: SESSION_ID,
+				question,
+				decision_summary: decision.substring(0, 500),
+				reasoning: `Combined findings from ${agentResults.map((r) => r.id).join(', ')}. ${glossaryTerms.length} glossary terms matched.`,
+				confidence: 'high',
+				agents_involved: agentResults.map((r) => r.id),
+				cost_usd: 0.15,
+				evidence_rules: ['checkin_window', 'rebooking_priority_connections'],
+				evidence_signal_types: ['delay_patterns'],
+			});
 
-	// ── Final output ──
-	console.log('\n' + '═'.repeat(60));
-	console.log('\n🎯 ORCHESTRATOR DECISION:\n');
-	console.log(decision);
-	console.log('\n' + '═'.repeat(60));
-	console.log(`\nSession: ${SESSION_ID}`);
-	console.log(`Agents consulted: ${agentResults.map((r) => r.id).join(', ')}`);
-	console.log('✅ Decision recorded as precedent');
+			// ── Final output ──
+			console.log('\n' + '═'.repeat(60));
+			console.log('\n🎯 ORCHESTRATOR DECISION:\n');
+			console.log(decision);
+			console.log('\n' + '═'.repeat(60));
+			console.log(`\nSession: ${SESSION_ID}`);
+			console.log(`Agents consulted: ${agentResults.map((r) => r.id).join(', ')}`);
+			console.log('✅ Decision recorded as precedent');
 
-	await harness.close();
+			await harness.close();
+		},
+	);
 }
 
 main().catch((err) => {

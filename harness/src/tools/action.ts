@@ -18,6 +18,7 @@ import { evaluateGovernance, filterPiiFromResults } from '../governance/index.js
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getAuthContext } from '../auth/context.js';
+import { shortHash, setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -36,10 +37,32 @@ export function registerActionTools(server: McpServer) {
 			reason: z.string().optional().describe('Why this query is needed (for audit trail)'),
 		},
 		async ({ sql, reason }) => {
-			const agent_id = getAuthContext().agentId;
+			const ctx = getAuthContext();
+			const agent_id = ctx.agentId;
+			const span = getActiveSpan();
+			if (span) {
+				setAuthAttributes(span, ctx);
+				span.setAttribute('dazense.sql.hash', shortHash(sql));
+				span.setAttribute('dazense.sql.length', sql.length);
+				if (reason) span.setAttribute('dazense.tool.reason', reason);
+			}
+
 			const governance = await evaluateGovernance({ agent_id, sql });
+			if (span) {
+				span.setAttribute('dazense.governance.allowed', governance.allowed);
+				if (governance.contract_id) {
+					span.setAttribute('dazense.governance.contract_id', governance.contract_id);
+				}
+			}
 
 			if (!governance.allowed) {
+				if (span) {
+					span.setAttribute('dazense.governance.reason', governance.reason ?? 'unknown');
+					span.setAttribute(
+						'dazense.governance.blocked_columns_count',
+						governance.blocked_columns?.length ?? 0,
+					);
+				}
 				return {
 					content: [
 						{
@@ -61,6 +84,10 @@ export function registerActionTools(server: McpServer) {
 
 			try {
 				const result = await executeQuery(sql, undefined, 30000);
+				if (span) {
+					span.setAttribute('dazense.query.row_count', result.rowCount ?? 0);
+					span.setAttribute('dazense.query.duration_ms', result.durationMs ?? 0);
+				}
 				// Defense in depth: always filter ALL known PII columns from results
 				const filtered = filterPiiFromResults(
 					result.rows,

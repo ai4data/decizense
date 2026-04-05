@@ -10,6 +10,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { exportTraceContext } from './tracing.js';
 
 export class HarnessClient {
 	private client: Client;
@@ -36,6 +37,16 @@ export class HarnessClient {
 
 		if (this.token) {
 			env.AGENT_TOKEN = this.token;
+		}
+
+		// Propagate W3C Trace Context to the harness child process via env vars
+		// (Phase 0 — stdio transport). Phase 1a will swap to HTTP headers.
+		const traceCarrier = exportTraceContext();
+		if (traceCarrier.traceparent) {
+			env.TRACEPARENT = traceCarrier.traceparent;
+		}
+		if (traceCarrier.tracestate) {
+			env.TRACESTATE = traceCarrier.tracestate;
 		}
 
 		this.transport = new StdioClientTransport({
