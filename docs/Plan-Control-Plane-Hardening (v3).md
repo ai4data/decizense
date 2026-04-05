@@ -22,7 +22,7 @@ Phase 2:  Replayability via OPA              (~1-2 weeks — policy as code + de
 Phase 3:  Delegation via Zitadel + act claim (~few days — user→agent chain)
 ```
 
-> **Revision 1** (post-architect-review): Phase 1 was split into 1a (topology) + 1b (DBOS) because the original "child-per-connection over stdio" model is incompatible with durable workflows. See "Review Revisions" section below for the full list of fixes applied to this plan.
+> **Revisions 1 & 2** (post-architect-review): Phase 1 was split into 1a (topology) + 1b (DBOS) in Revision 1 because the original "child-per-connection over stdio" model is incompatible with durable workflows. Revision 2 added delegation fan-out propagation, HTTP + config-only hardening, post-topology trace propagation, and a stricter `workflow_id` rule that requires explicit caller IDs for interactive queries. See "Review Revisions" section below for the full list of fixes applied to this plan.
 
 **Tools selected** (all open-source, all verified current as of 2026):
 
@@ -122,12 +122,53 @@ Convert harness from "child-per-connection over stdio" to a single long-lived pr
 - Replace `StdioClientTransport` with `StreamableHTTPClientTransport`
 - Connect to `HARNESS_HTTP_URL` (default `http://localhost:9080/mcp`)
 - Pass identity via HTTP headers: `X-Agent-Id`, `Authorization: Bearer <AGENT_TOKEN>`
+- Propagate tracing via W3C Trace Context headers: `traceparent`, `tracestate` (see Trace Propagation below)
 - Harness extracts these on connection init and builds the per-session AuthContext
 
 **Modify** `docker-compose.yml` (or new file):
 
 - Harness runs as a service with the HTTP port exposed
 - Postgres dependency already exists
+
+### Trace Propagation after topology shift (Fix from Finding 3)
+
+> Phase 0 introduces OTel in the stdio world (traceparent passed via env var to child process). Phase 1a moves to long-lived HTTP, so trace propagation must change accordingly.
+
+**Canonical rule (post-Phase 1a):**
+
+- Trace context propagates via **W3C Trace Context HTTP headers** (`traceparent`, `tracestate`) on every MCP request
+- Span hierarchy:
+    - **Parent span**: created by the agent process before calling a harness tool (`gen_ai.tool.call`)
+    - **Incoming HTTP span**: created by the harness HTTP server on receiving the request, linked to the parent via `traceparent`
+    - **Tool handler span**: per-tool span inside the harness (`dazense.tool.<name>`)
+    - **Outbound spans**: DB queries, OMD calls, OPA evaluations, Zitadel token exchanges — all children of the tool handler span
+- No env-var trace propagation after Phase 1a. The stdio env-var path from Phase 0 is removed when Phase 1a lands.
+
+### HTTP + config-only hardening (Fix from Finding 2)
+
+> Over stdio, `AGENT_ID` via env var was trustworthy because the child process was spawned by the trusted parent. Over HTTP, `X-Agent-Id` is just a header — trivially spoofable. This section locks down the unsafe combinations.
+
+**Allowed configuration matrix:**
+
+| Transport                | Auth mode        | Bind                                | Allowed?                  |
+| ------------------------ | ---------------- | ----------------------------------- | ------------------------- |
+| stdio                    | config-only      | —                                   | ✓ Plan v2 backward compat |
+| stdio                    | jwt              | —                                   | ✓                         |
+| HTTP                     | config-only      | `127.0.0.1` / `::1` + explicit flag | ✓ dev only                |
+| HTTP                     | config-only      | any other bind                      | **✗ fatal at startup**    |
+| HTTP                     | jwt              | any                                 | ✓                         |
+| HTTP, production profile | anything not jwt | any                                 | **✗ fatal at startup**    |
+
+**Enforcement in `harness/src/server.ts` startup**:
+
+1. If `HARNESS_TRANSPORT=http` AND `auth.mode=config-only`:
+    - Require `HARNESS_BIND` ∈ `{127.0.0.1, ::1, localhost}` — else throw `AuthError: config-only over HTTP requires localhost bind`
+    - Require `HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true` env var — else throw `AuthError: config-only over HTTP is insecure; set HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true to acknowledge`
+    - Emit a loud stderr warning: `[harness] WARNING: config-only auth in HTTP mode is insecure — localhost only, dev only`
+2. If `DAZENSE_PROFILE=production`:
+    - Require `auth.mode=jwt` — else throw `AuthError: production profile requires AUTH_MODE=jwt`
+    - No overrides, no bypass flags
+3. `X-Agent-Id` header is **only honored** in config-only mode (and only when the above guardrails pass); in jwt mode it is ignored entirely — identity comes from the token's claim mapping.
 
 ### Verification
 
@@ -152,6 +193,33 @@ AGENT_ID=booking npx tsx agents/src/booking.ts "list bookings"
 # Verify: TTL expiry removes stale sessions after 1h
 ```
 
+**3. HTTP + config-only hardening test** — all combinations from the matrix:
+
+```bash
+# Should fail: config-only HTTP bound to 0.0.0.0
+HARNESS_TRANSPORT=http HARNESS_BIND=0.0.0.0 AUTH_MODE=config-only npm start
+# Expected: AuthError "requires localhost bind"
+
+# Should fail: config-only HTTP localhost without explicit ack flag
+HARNESS_TRANSPORT=http HARNESS_BIND=127.0.0.1 AUTH_MODE=config-only npm start
+# Expected: AuthError "set HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true"
+
+# Should succeed: config-only HTTP localhost with ack flag
+HARNESS_TRANSPORT=http HARNESS_BIND=127.0.0.1 AUTH_MODE=config-only HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true npm start
+# Expected: starts with WARNING to stderr
+
+# Should fail: production profile without jwt
+DAZENSE_PROFILE=production HARNESS_TRANSPORT=http AUTH_MODE=config-only npm start
+# Expected: AuthError "production profile requires AUTH_MODE=jwt"
+```
+
+**4. Spoofing test** — jwt mode ignores X-Agent-Id header:
+
+```bash
+# Connect with valid JWT for flight_ops, but send X-Agent-Id: orchestrator
+# Expected: AuthContext.agentId = "flight_ops" (from token), header ignored
+```
+
 **3. Plan v2 regression** — `test-query.ts` and `test-auth.ts` still pass (in `config-only` and `jwt` modes).
 
 ---
@@ -166,9 +234,27 @@ The durable unit is the **decision session**: one user question → orchestrator
 
 ### Canonical workflow_id rule (authoritative — referenced everywhere else)
 
-> **The caller provides `workflow_id` explicitly. If absent, the harness derives it as `sha256(caller_subject + question)[0:32]`. `session_id` is derived from `workflow_id` (first 16 chars + short suffix for human readability), not the other way around.**
->
-> **Day boundaries:** idempotency is **permanent** across day boundaries. No `date_bucket` in the hash. Rationale: if the same user asks the same question in January and again in July, the July call should NOT silently replay the January outcome — callers who want a fresh answer provide a fresh `workflow_id`. If callers want cross-day replay they reuse the same `workflow_id`. The decision is theirs, not the harness's.
+> **Interactive queries require an explicit `workflow_id` from the caller. There is NO implicit fallback for interactive use. Batch/replay jobs may omit `workflow_id` only if they provide an `intent_version` (or `request_nonce`) as a freshness dimension.**
+
+**Resolution algorithm:**
+
+```
+IF workflow_id is provided by caller:
+    use it as-is
+    session_id = workflow_id[0:16] + "-" + short-human-suffix
+ELSE IF caller is a batch job (HARNESS_MODE=batch) AND intent_version is provided:
+    workflow_id = sha256(caller_subject + question + intent_version)[0:32]
+ELSE:
+    FATAL ERROR: "workflow_id required for interactive queries"
+```
+
+**Why the earlier 'permanent derivation' rule was wrong (Fix from Finding 4):** an earlier draft said the harness could silently derive `workflow_id = sha256(caller_subject + question)[0:32]` with no freshness dimension. That meant a user asking "what's my next flight?" in January would receive the cached January outcome if they asked the same question in July — a correctness hazard for human-facing flows. The revised rule:
+
+- **Removes implicit derivation for interactive queries entirely** — callers MUST provide `workflow_id`
+- **Permits derivation only in batch mode** where the caller controls `intent_version` explicitly, making the freshness boundary the caller's problem, not the harness's
+- **Day boundaries are irrelevant** because freshness now comes from `intent_version`, not time windows. No `date_bucket`, no clock-dependent logic.
+
+**session_id is still derived from workflow_id**, not the other way around. No more `session-${Date.now()}` anywhere in the code path.
 
 ### What changes
 
@@ -493,6 +579,57 @@ If any of this is wrong against real Zitadel output, we fix the claim contract d
 
 User logs into Zitadel → gets an access token. The backend performs RFC 8693 Token Exchange to obtain a token with the actor claim set. The harness verifies the delegation chain per the claim contract above and records both identities in the audit trail.
 
+### Delegation fan-out across orchestrator → subagents (Fix from Finding 1)
+
+> **The delegation chain MUST be preserved end-to-end across orchestrator → subagent fan-out by design.** Without explicit rules, `delegated_subject` would disappear the moment the orchestrator delegates to a domain agent, because each subagent would re-authenticate with its own service-user token. This section locks down how delegation propagates through a multi-agent workflow.
+
+**Invariant:** every audit row produced during a decision session — findings, proposals, actions, outcomes, decision_logs — carries the **same** `delegated_subject` as the ingress token. If alice initiates a decision via the orchestrator, every subagent's contribution must show `delegated_subject = 'alice'`. No exceptions.
+
+**Mechanism: per-subagent token exchange (chained `act` claim)**
+
+When the orchestrator (authenticated as `sub=alice`, `act.sub=orchestrator-agent`) invokes a subagent like `flight_ops`, the harness (or the orchestrator's client) performs an RFC 8693 token exchange against Zitadel to mint a new access token `T_sub` with:
+
+```
+sub:      alice                              # delegated subject preserved
+act: {
+  sub:    flight_ops                         # new actor (the subagent)
+  act: {
+    sub:  orchestrator-agent                 # previous actor, nested
+  }
+}
+aud:      dazense-harness
+exp:      short (60s default)
+```
+
+RFC 8693 explicitly supports nested `act` chains precisely for this case. The subagent then opens a connection to the harness with `T_sub`; the harness resolves identity per the Claim Contract: `agentId = flight_ops` (from `act.sub`), `delegatedSubject = alice` (from `sub`), and stores the full actor chain in the audit trail.
+
+**Two implementation options (pick one at Phase 3 build time):**
+
+1. **Zitadel round-trip per subagent call** (**recommended**) — on each sub-agent invocation, the harness calls Zitadel's token exchange endpoint to mint `T_sub`. Strongest cryptographic chain. ~30-80ms latency per exchange. Simple to audit.
+2. **Harness-minted internal delegation tokens** (future optimization) — harness holds a private signing key and mints `T_sub` locally as short-lived JWTs with the same claim shape. ~5ms latency. Requires managing a harness signing key, publishing a corresponding JWKS, and configuring Zitadel to accept tokens from a secondary issuer. Documented as a future optimization, not in this phase.
+
+**Phase 3 implements Option 1.** If latency becomes a bottleneck, Option 2 is a drop-in replacement because the claim shape is identical.
+
+**New claim shape added to the Claim Contract doc**: a real decoded Zitadel token showing a two-level nested `act` chain (`alice → orchestrator-agent → flight_ops`), captured via the `scripts/capture-zitadel-fixtures.ts` script.
+
+**Orchestrator code path (updated from Phase 1b)**:
+
+- `runDomainAgent(agentId, ...)` in `agents/src/orchestrator.ts` accepts the current `AuthContext` as an argument
+- Before opening a subagent connection, it calls `exchangeTokenForSubagent(currentToken, targetAgentId)` which round-trips Zitadel and returns `T_sub`
+- The subagent connection uses `T_sub` as its `AGENT_TOKEN`
+- Harness verifies, records both subjects, propagates the same `delegated_subject` into every DB write
+
+**Additional audit fields** (added to schema changes in this phase):
+
+```sql
+ALTER TABLE decision_findings   ADD COLUMN actor_chain JSONB;
+ALTER TABLE decision_proposals  ADD COLUMN actor_chain JSONB;
+ALTER TABLE decision_outcomes   ADD COLUMN actor_chain JSONB;
+ALTER TABLE decision_logs       ADD COLUMN actor_chain JSONB;
+```
+
+`actor_chain` stores the full nested `act` chain (e.g. `["orchestrator-agent", "flight_ops"]`), not just the innermost actor. This lets compliance answer "who was involved in this decision?" completely — not just "who wrote this row?".
+
 ### What changes
 
 **New file** `docker/docker-compose.zitadel.yml`:
@@ -600,13 +737,46 @@ ALTER TABLE decision_logs ADD COLUMN delegated_subject VARCHAR(100);
 
 **4. Audit query test** — `SELECT * FROM decision_findings WHERE delegated_subject = 'alice'` returns only alice's decisions regardless of which agent ran them.
 
-**5. Compliance evidence test** — given a user complaint, generate a report of every decision made on their behalf in a date range, with `agent_id`, `token_hash`, `bundle_revision`, and outcome.
+**5. Delegation fan-out test (Finding 1)** — alice runs the orchestrator end-to-end:
+
+```bash
+ALICE_TOKEN=$(scripts/zitadel-login.sh alice)
+AGENT_TOKEN=$(scripts/zitadel-exchange.sh "$ALICE_TOKEN" orchestrator-agent)
+AUTH_MODE=jwt AGENT_TOKEN=$AGENT_TOKEN npx tsx agents/src/orchestrator.ts \
+  "Will I miss my connection if flight F1001 is delayed?"
+
+# Expected: findings from flight_ops, booking, customer_service all appear
+# Then run:
+psql -c "SELECT agent_id, delegated_subject, actor_chain FROM decision_findings WHERE session_id = '<session>';"
+#
+# Expected result:
+#   agent_id         | delegated_subject | actor_chain
+#   flight_ops       | alice             | ["orchestrator-agent", "flight_ops"]
+#   booking          | alice             | ["orchestrator-agent", "booking"]
+#   customer_service | alice             | ["orchestrator-agent", "customer_service"]
+#
+# CRITICAL: delegated_subject must be "alice" on EVERY row. No exceptions.
+```
+
+**6. Compliance evidence test** — given a user complaint, generate a report of every decision made on their behalf in a date range, with `agent_id`, `actor_chain`, `token_hash`, `bundle_revision`, and outcome.
 
 ---
 
 ## Review Revisions (applied after architect review)
 
-The first draft of this plan was reviewed by the user's architect. Seven findings were raised (2 critical, 3 high, 2 medium) plus 6 guardrails. All are addressed in the current plan text. This section summarizes the fixes so future readers understand why certain sections look the way they do.
+The plan was reviewed twice by the user's architect. Revision 1 addressed the initial 7 findings + 6 guardrails; Revision 2 addressed 5 follow-up findings on the revised plan. All are resolved in the current text. This section summarizes the fixes so future readers understand why certain sections look the way they do.
+
+### Revision 2 (second architect pass)
+
+| #    | Severity | Finding                                                                                                                                                            | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R2-1 | High     | Delegation propagation was not defined for orchestrator → subagent fan-out. `delegated_subject` would silently disappear on subagent actions.                      | **Phase 3 — Delegation fan-out section**: every subagent invocation performs an RFC 8693 token exchange that preserves `sub=alice` and nests the new actor under `act.act`. New `actor_chain` JSONB column on all audit tables records the full chain. Verification test asserts every row in a fan-out session shares the same `delegated_subject`. Default mechanism: Zitadel round-trip (Option 1); harness-minted internal tokens documented as future optimization (Option 2). |
+| R2-2 | High     | `config-only` + HTTP transport was spoofable via `X-Agent-Id` header. No guardrails on which combinations were safe.                                               | **Phase 1a — HTTP + config-only hardening section**: full configuration matrix added. `config-only` over HTTP requires localhost bind + explicit `HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true` ack, with loud startup warning. Production profile (`DAZENSE_PROFILE=production`) hard-fails unless `auth.mode=jwt`. `X-Agent-Id` header is only honored in `config-only`; ignored entirely in `jwt` mode. New verification test matrix covers all combinations.                         |
+| R2-3 | Medium   | Trace propagation was inconsistent across phases — Phase 0 used env vars (stdio), Phase 1a moves to HTTP but didn't specify how traces carry over.                 | **Phase 1a — Trace Propagation section**: canonical rule. Post-Phase 1a, trace context propagates via W3C `traceparent`/`tracestate` HTTP headers. Span hierarchy documented: parent (agent process) → HTTP request span → tool handler span → outbound DB/OMD/OPA/Zitadel spans. Env-var propagation from Phase 0 is removed when Phase 1a lands.                                                                                                                                  |
+| R2-4 | Medium   | The fallback `workflow_id` derivation (`sha256(caller_subject + question)` forever) would cause interactive queries to silently replay months-old cached outcomes. | **Phase 1b — Canonical workflow_id rule rewritten**: interactive queries now REQUIRE an explicit `workflow_id` from the caller. Fatal error if missing. Implicit derivation is allowed ONLY in batch mode (`HARNESS_MODE=batch`) AND only when caller provides `intent_version`. The old "permanent derivation" fallback is explicitly removed.                                                                                                                                     |
+| R2-5 | Low      | Duplicate manifest bullet in Phase 2.                                                                                                                              | Resolved during Phase 2 rewrite in Revision 1. Current text has a single manifest bullet.                                                                                                                                                                                                                                                                                                                                                                                           |
+
+### Revision 1 (first architect pass)
 
 ### Findings resolved
 
