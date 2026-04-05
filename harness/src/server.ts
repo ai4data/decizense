@@ -17,6 +17,10 @@
  *   SCENARIO_PATH=../scenario/travel npx tsx src/server.ts
  */
 
+// Tracing MUST be initialized before any other imports that might be auto-instrumented
+import { initTracing, shutdownTracing } from './observability/tracing.js';
+initTracing();
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
@@ -32,11 +36,17 @@ import { registerEventTools } from './tools/event.js';
 import { registerPersistTools, initPersistTools } from './tools/persist.js';
 import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
 import { registerAdminTools, initAdminTools } from './tools/admin.js';
+import { installToolTracing } from './observability/span.js';
 
 const server = new McpServer({
 	name: 'dazense-harness',
 	version: '0.1.0',
 });
+
+// Install auto-tracing on server.tool() — every tool registered below is wrapped
+// in a dazense.tool.<name> span automatically. Handlers that need custom
+// attributes use getActiveSpan() directly. MUST run before any tool registration.
+installToolTracing(server);
 
 // ── Agent-facing tools (agents call these) ──
 registerContextTools(server); // Layer 1+2: get_context, get_lineage, search_glossary, etc.
@@ -121,6 +131,7 @@ async function main() {
 
 	// Cleanup on exit
 	process.on('SIGINT', async () => {
+		await shutdownTracing();
 		await closeDatabase();
 		process.exit(0);
 	});

@@ -13,6 +13,7 @@ import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { filterPiiFromFinding } from '../governance/index.js';
 import { getAuthContext } from '../auth/context.js';
+import { setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -35,6 +36,13 @@ export function registerPersistTools(server: McpServer) {
 		async ({ session_id, finding, confidence, data_sources }) => {
 			const ctx = getAuthContext();
 			const agent_id = ctx.agentId;
+			const span = getActiveSpan();
+			if (span) {
+				setAuthAttributes(span, ctx);
+				span.setAttribute('dazense.finding.confidence', confidence);
+				span.setAttribute('dazense.finding.length', finding.length);
+				if (data_sources) span.setAttribute('dazense.finding.data_sources_count', data_sources.length);
+			}
 			try {
 				const safeFinding = filterPiiFromFinding(finding);
 				const result = await executeQuery(
@@ -52,6 +60,8 @@ export function registerPersistTools(server: McpServer) {
 						ctx.sessionId,
 					],
 				);
+				if (span)
+					span.setAttribute('dazense.finding.id', (result.rows[0] as { finding_id: number }).finding_id);
 				const row = result.rows[0] as { finding_id: number; created_at: string };
 				return {
 					content: [

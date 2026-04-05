@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { ScenarioLoader } from '../config/index.js';
 import { authenticateAgent } from '../governance/index.js';
 import { getAuthContext, setAgentIdIfEmpty, setSessionId } from '../auth/context.js';
+import { setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -38,6 +39,13 @@ export function registerControlTools(server: McpServer) {
 			question: z.string().optional().describe('The question this agent is working on'),
 		},
 		async ({ agent_id, session_id, question }) => {
+			const span = getActiveSpan();
+			if (span) {
+				span.setAttribute('dazense.requested_agent_id', agent_id);
+				span.setAttribute('dazense.session.id', session_id);
+				if (question) span.setAttribute('dazense.question.length', question.length);
+			}
+
 			if (!loader) {
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],
@@ -79,6 +87,9 @@ export function registerControlTools(server: McpServer) {
 					],
 				};
 			}
+
+			// Now that identity is resolved, attach auth attributes to the active span
+			if (span) setAuthAttributes(span, getAuthContext());
 
 			const agentsConfig = loader.agents;
 			const agentConfig = agentsConfig.agents[agent_id];
