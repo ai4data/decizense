@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { evaluateGovernance, filterPiiFromResults } from '../governance/index.js';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
-import { getAuthContext } from '../auth/context.js';
+import { getCurrentAuthContext } from '../auth/context.js';
 import { shortHash, setAuthAttributes, getActiveSpan } from '../observability/span.js';
 
 let loader: ScenarioLoader | null = null;
@@ -36,8 +36,8 @@ export function registerActionTools(server: McpServer) {
 			sql: z.string().describe('SQL query to execute'),
 			reason: z.string().optional().describe('Why this query is needed (for audit trail)'),
 		},
-		async ({ sql, reason }) => {
-			const ctx = getAuthContext();
+		async ({ sql, reason }, extra) => {
+			const ctx = getCurrentAuthContext(extra);
 			const agent_id = ctx.agentId;
 			const span = getActiveSpan();
 			if (span) {
@@ -47,7 +47,7 @@ export function registerActionTools(server: McpServer) {
 				if (reason) span.setAttribute('dazense.tool.reason', reason);
 			}
 
-			const governance = await evaluateGovernance({ agent_id, sql });
+			const governance = await evaluateGovernance({ authContext: ctx, sql });
 			if (span) {
 				span.setAttribute('dazense.governance.allowed', governance.allowed);
 				if (governance.contract_id) {
@@ -144,9 +144,9 @@ export function registerActionTools(server: McpServer) {
 			dimensions: z.array(z.string()).optional().describe('Dimensions to group by'),
 			filters: z.array(z.object({ dimension: z.string(), operator: z.string(), value: z.string() })).optional(),
 		},
-		async ({ measures, dimensions, filters }) => {
-			const agent_id = getAuthContext().agentId;
-			const governance = await evaluateGovernance({ agent_id, metric_refs: measures });
+		async ({ measures, dimensions, filters }, extra) => {
+			const ctx = getCurrentAuthContext(extra);
+			const governance = await evaluateGovernance({ authContext: ctx, metric_refs: measures });
 			if (!governance.allowed) {
 				return {
 					content: [
@@ -205,8 +205,8 @@ export function registerActionTools(server: McpServer) {
 			evidence_event_ids: z.array(z.number()).optional().describe('Evidence: event IDs'),
 			evidence_rules: z.array(z.string()).optional().describe('Evidence: business rules'),
 		},
-		async ({ action_type, parameters, reason, session_id, evidence_event_ids, evidence_rules }) => {
-			const ctx = getAuthContext();
+		async ({ action_type, parameters, reason, session_id, evidence_event_ids, evidence_rules }, extra) => {
+			const ctx = getCurrentAuthContext(extra);
 			const agent_id = ctx.agentId;
 			if (!loader) {
 				return {
@@ -363,8 +363,8 @@ export function registerActionTools(server: McpServer) {
 		'get_permissions',
 		'Check what actions you are permitted to propose, approve, and execute',
 		{},
-		async () => {
-			const agent_id = getAuthContext().agentId;
+		async (extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId;
 			if (!loader) {
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Harness not initialized' }) }],

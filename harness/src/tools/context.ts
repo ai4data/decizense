@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { getCatalogClient } from '../catalog/index.js';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
-import { getAuthContext } from '../auth/context.js';
+import { getCurrentAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -33,8 +33,8 @@ export function registerContextTools(server: McpServer) {
 		{
 			question: z.string().describe('The business question to get context for'),
 		},
-		async ({ question }) => {
-			const agent_id = getAuthContext().agentId || 'unknown';
+		async ({ question }, extra) => {
+			const agent_id = getCurrentAuthContext(extra).agentId || 'unknown';
 			const catalog = getCatalogClient();
 
 			if (!catalog) {

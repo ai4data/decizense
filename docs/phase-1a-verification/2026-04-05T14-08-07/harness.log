@@ -1,0 +1,15 @@
+[tracing] OpenTelemetry initialized → http://localhost:4318/v1/traces
+[harness] Loading scenario from: ../scenario/travel
+[harness] Scenario: SkyJet Travel Operations (travel)
+[harness] Database: postgresql://localhost:5433/travel_db
+[catalog] Provider: openmetadata
+[harness] Catalog: connected (http://localhost:8585)
+[harness] Agents: orchestrator, flight_ops, booking, customer_service
+[harness] Policy: 4 PII columns blocked, max 500 rows
+[harness] WARNING: config-only auth in HTTP mode is insecure — localhost only, dev only.
+[harness] HTTP transport listening on http://127.0.0.1:9080/mcp
+[harness] session open: e83d8a45… agent=flight_ops method=config-only
+[harness] session open: a030efb9… agent=flight_ops method=config-only
+[harness] session open: 9a7b175b… agent=flight_ops method=config-only
+[harness] session open: 02080094… agent=flight_ops method=config-only
+[harness] session open: 74b81073… agent=booking method=config-only

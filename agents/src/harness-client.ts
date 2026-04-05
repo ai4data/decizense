@@ -1,20 +1,22 @@
 /**
  * Harness MCP Client — connects an agent to the dazense harness.
  *
- * Starts the harness MCP server as a child process and provides
- * typed tool wrappers that agents can call.
+ * Plan v3 Phase 1a: the harness is a long-lived HTTP server. Agents connect
+ * over Streamable HTTP (MCP's official HTTP+SSE transport). Identity travels
+ * via HTTP headers (X-Agent-Id, Authorization: Bearer) and W3C trace context
+ * travels via `traceparent` / `tracestate` headers. The LLM never sees any
+ * of these headers — they live on the outbound HTTP request only.
  *
- * Identity flows via AGENT_TOKEN/AGENT_ID environment variables
- * to the child process — never as tool arguments visible to the model.
+ * Default URL: http://127.0.0.1:9080/mcp (override with HARNESS_HTTP_URL).
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { exportTraceContext } from './tracing.js';
 
 export class HarnessClient {
 	private client: Client;
-	private transport: StdioClientTransport | null = null;
+	private transport: StreamableHTTPClientTransport | null = null;
 	private agentId: string;
 	private token: string | undefined;
 
@@ -25,51 +27,41 @@ export class HarnessClient {
 	}
 
 	/**
-	 * Connect to the harness MCP server.
-	 * Passes AGENT_TOKEN and AGENT_ID via environment — never as tool args.
+	 * Connect to the long-lived harness HTTP server.
+	 * Identity goes in HTTP headers, never in tool arguments.
+	 *
+	 * `scenarioPath` is kept for backward-compat with existing callers but is
+	 * ignored in HTTP mode — the harness owns scenario selection at its own
+	 * startup time.
 	 */
-	async connect(scenarioPath: string) {
-		const env: Record<string, string> = {
-			...(process.env as Record<string, string>),
-			SCENARIO_PATH: scenarioPath,
-			AGENT_ID: this.agentId,
+	async connect(_scenarioPath?: string): Promise<void> {
+		const url = new URL(process.env.HARNESS_HTTP_URL ?? 'http://127.0.0.1:9080/mcp');
+
+		const headers: Record<string, string> = {
+			'X-Agent-Id': this.agentId,
 		};
-
 		if (this.token) {
-			env.AGENT_TOKEN = this.token;
+			headers['Authorization'] = `Bearer ${this.token}`;
 		}
 
-		// Propagate W3C Trace Context to the harness child process via env vars
-		// (Phase 0 — stdio transport). Phase 1a will swap to HTTP headers.
+		// W3C trace context propagation — traceparent/tracestate HTTP headers.
+		// This replaces the env-var path from Phase 0 (stdio).
 		const traceCarrier = exportTraceContext();
-		if (traceCarrier.traceparent) {
-			env.TRACEPARENT = traceCarrier.traceparent;
-		}
-		if (traceCarrier.tracestate) {
-			env.TRACESTATE = traceCarrier.tracestate;
-		}
+		if (traceCarrier.traceparent) headers['traceparent'] = traceCarrier.traceparent;
+		if (traceCarrier.tracestate) headers['tracestate'] = traceCarrier.tracestate;
 
-		this.transport = new StdioClientTransport({
-			command: 'npx',
-			args: ['tsx', 'src/server.ts'],
-			cwd: '../harness',
-			env,
+		this.transport = new StreamableHTTPClientTransport(url, {
+			requestInit: { headers },
 		});
 
 		await this.client.connect(this.transport);
 	}
 
-	/**
-	 * List all available tools from the harness.
-	 */
 	async listTools() {
 		const result = await this.client.listTools();
 		return result.tools;
 	}
 
-	/**
-	 * Call a harness tool and return the parsed result.
-	 */
 	async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
 		const result = await this.client.callTool({ name, arguments: args });
 		const content = result.content as Array<{ type: string; text: string }>;
@@ -79,10 +71,6 @@ export class HarnessClient {
 		return result;
 	}
 
-	/**
-	 * Initialize the agent — get identity, scope, rules, constraints.
-	 * agent_id is passed for validation (must match AGENT_ID env).
-	 */
 	async initializeAgent(sessionId: string, question?: string) {
 		return this.callTool('initialize_agent', {
 			agent_id: this.agentId,
@@ -91,17 +79,10 @@ export class HarnessClient {
 		});
 	}
 
-	/**
-	 * Execute a governed SQL query.
-	 * agent_id comes from AuthContext (env), not from this call.
-	 */
 	async queryData(sql: string, reason?: string) {
 		return this.callTool('query_data', { sql, reason });
 	}
 
-	/**
-	 * Get applicable business rules.
-	 */
 	async getBusinessRules(tables?: string[], metricRefs?: string[]) {
 		return this.callTool('get_business_rules', {
 			tables,
@@ -109,10 +90,6 @@ export class HarnessClient {
 		});
 	}
 
-	/**
-	 * Write a finding to the shared workspace.
-	 * agent_id comes from AuthContext (env), not from this call.
-	 */
 	async writeFinding(
 		sessionId: string,
 		finding: string,
