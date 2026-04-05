@@ -137,7 +137,10 @@ CREATE TABLE decision_proposals (
     auth_method VARCHAR(20),
     token_hash VARCHAR(16),
     correlation_id VARCHAR(100),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    workflow_id VARCHAR(100),
+    idempotency_key VARCHAR(100),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE decision_approvals (
@@ -156,6 +159,8 @@ CREATE TABLE decision_actions (
     parameters JSONB NOT NULL DEFAULT '{}',
     result TEXT,
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'executing', 'completed', 'failed')),
+    workflow_id VARCHAR(100),
+    idempotency_key VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMP
 );
@@ -177,8 +182,50 @@ CREATE TABLE decision_outcomes (
     auth_method VARCHAR(20),
     token_hash VARCHAR(16),
     correlation_id VARCHAR(100),
+    workflow_id VARCHAR(100),
+    parent_workflow_id VARCHAR(100),
+    prompt_version VARCHAR(50),
+    model_version VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- Plan v3 Phase 1b: workflow run log linking DBOS workflow_ids to sessions
+CREATE TABLE decision_workflow_runs (
+    run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_id VARCHAR(100) NOT NULL,
+    session_id VARCHAR(100) NOT NULL,
+    agent_id VARCHAR(50) NOT NULL,
+    question TEXT,
+    status VARCHAR(20) NOT NULL,
+    started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMP,
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    auth_method VARCHAR(20),
+    token_hash VARCHAR(16)
+);
+CREATE INDEX idx_workflow_runs_workflow_id ON decision_workflow_runs(workflow_id);
+CREATE INDEX idx_workflow_runs_session_id ON decision_workflow_runs(session_id);
+
+-- Phase 1b: exactly-once side-effect enforcement at the SQL layer.
+-- Each workflow produces at most one row per table in this slice; DBOS step
+-- replays during recovery-edge timing cannot duplicate these side effects.
+CREATE UNIQUE INDEX uniq_workflow_runs_workflow_id
+    ON decision_workflow_runs(workflow_id)
+    WHERE workflow_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_proposals_workflow_id
+    ON decision_proposals(workflow_id)
+    WHERE workflow_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_actions_workflow_id
+    ON decision_actions(workflow_id)
+    WHERE workflow_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_outcomes_workflow_id
+    ON decision_outcomes(workflow_id)
+    WHERE workflow_id IS NOT NULL;
+-- decision_approvals has its own idempotency rule: one row per (proposal, approver).
+-- Replay of the approve step cannot create a second 'auto' approval on the same proposal.
+CREATE UNIQUE INDEX uniq_approvals_proposal_approver
+    ON decision_approvals(proposal_id, approved_by);
 
 CREATE TABLE decision_findings (
     finding_id SERIAL PRIMARY KEY,

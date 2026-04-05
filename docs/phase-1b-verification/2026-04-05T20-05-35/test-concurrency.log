@@ -1,0 +1,16 @@
+🔀 Phase 1a Concurrency Test
+
+── flight_ops session ──
+  init identity:      flight_ops
+  own query:          success
+  cross-bundle query: blocked
+  cross-bundle reason: Tables [bookings] are not in your bundle (flights-ops). You can only query: publ...
+
+── booking session ──
+  init identity:      booking
+  own query:          success
+  cross-bundle query: blocked
+  cross-bundle reason: Tables [flights] are not in your bundle (bookings). You can only query: public.b...
+
+── Result ──
+✅ PASS — each agent sees only its own identity and bundle scope

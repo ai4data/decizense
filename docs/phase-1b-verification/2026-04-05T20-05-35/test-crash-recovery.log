@@ -1,0 +1,23 @@
+🧨 Phase 1b Crash Recovery Test
+Workflow ID: wf-crash-recovery-1775412398
+
+── Phase 1: harness with CRASH_AFTER_STEP=approve_decision ──
+  harness ready
+  firing workflow (will crash)...
+fire-workflow: connection error (expected on crash): MCP error -32001: Request timed out
+  waiting for crash...
+  ✓ crash hook fired
+  DBOS workflow_status before recovery: PENDING
+
+── Phase 2: restart harness (DBOS auto-recovery) ──
+  ✓ workflow status: SUCCESS (recovered)
+
+── Phase 3: verification ──
+  decision_proposals rows:     1
+  decision_approvals rows:     1
+  decision_actions rows:       1
+  decision_outcomes rows:      1
+  decision_workflow_runs:      completed
+  dbos.workflow_status:        SUCCESS
+
+✅ PASS — DBOS recovered the workflow after crash and it completed exactly once

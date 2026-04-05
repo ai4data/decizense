@@ -44,7 +44,9 @@ import { registerEventTools } from './tools/event.js';
 import { registerPersistTools, initPersistTools } from './tools/persist.js';
 import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
 import { registerAdminTools, initAdminTools } from './tools/admin.js';
+import { registerWorkflowTools } from './tools/workflow.js';
 import { installToolTracing } from './observability/span.js';
+import { initDbos, shutdownDbos } from './workflows/dbos-init.js';
 
 // ─── Shared init ───────────────────────────────────────────────────────────
 
@@ -105,6 +107,7 @@ function createHarnessMcpServer(): McpServer {
 	registerPersistTools(server);
 	registerVerifyTools(server);
 	registerAdminTools(server);
+	registerWorkflowTools(server); // Plan v3 Phase 1b — DBOS workflow tools
 	return server;
 }
 
@@ -206,6 +209,15 @@ async function startHttpServer(loader: ScenarioLoader): Promise<void> {
 
 	enforceHardeningGuardrails(loader, 'http', bind);
 
+	// Plan v3 Phase 1b — DBOS durable workflows. Launched in HTTP mode only
+	// because stdio mode's process lifetime is too short for durable execution.
+	// Can be disabled via DBOS_DISABLED=true (e.g., for pure MCP regression tests).
+	if (process.env.DBOS_DISABLED !== 'true') {
+		await initDbos(loader.scenario);
+	} else {
+		console.error('[dbos] disabled via DBOS_DISABLED=true');
+	}
+
 	// Per-session state: one transport + McpServer instance per MCP session
 	const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
 
@@ -297,6 +309,7 @@ async function startHttpServer(loader: ScenarioLoader): Promise<void> {
 				/* ignore */
 			}
 		}
+		await shutdownDbos();
 		await shutdownTracing();
 		await closeDatabase();
 		process.exit(0);
