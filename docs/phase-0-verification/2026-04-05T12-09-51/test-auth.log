@@ -1,0 +1,26 @@
+🔐 Auth Verification Test
+
+[tracing] OpenTelemetry initialized → http://localhost:4318/v1/traces (parent=00-873d3bddd42ae85f0a098cb2...)
+[harness] Loading scenario from: ../scenario/travel
+[harness] Scenario: SkyJet Travel Operations (travel)
+[harness] Database: postgresql://localhost:5433/travel_db
+[catalog] Provider: openmetadata
+[harness] Catalog: connected (http://localhost:8585)
+[harness] Auth: config-only | agent=flight_ops | uri=agent://dazense.local/flight_ops
+[harness] Agents: orchestrator, flight_ops, booking, customer_service
+[harness] Policy: 4 PII columns blocked, max 500 rows
+[harness] dazense Agent Harness MCP server started
+── Test 1: wrong agent_id at initialize_agent (should REJECT) ──
+✓ Rejected: agent_id "booking" does not match authenticated identity "flight_ops"
+
+── Test 2: correct agent_id (should PASS) ──
+✓ Authenticated: Flight Operations Agent
+  auth_method: config-only
+  agent_uri: agent://dazense.local/flight_ops
+
+── Test 3: write_finding persists audit fields ──
+✓ Finding stored: finding_id=18
+
+✅ Test suite complete — check DB for audit fields:
+   SELECT finding_id, agent_id, auth_method, token_hash, correlation_id
+   FROM decision_findings WHERE session_id = 'test-auth-002';

@@ -1,0 +1,25 @@
+# Local observability stack for dazense — Jaeger all-in-one.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.observability.yml up -d
+#
+# Endpoints:
+#   - OTLP HTTP receiver:  http://localhost:4318  (for OTEL_EXPORTER_OTLP_ENDPOINT)
+#   - Jaeger UI:           http://localhost:16686
+#
+# To use: set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 in the harness
+# and agent environments (default). The harness boots OTel at startup; each
+# agent run produces a full trace visible in the Jaeger UI.
+
+services:
+    jaeger:
+        container_name: dazense_jaeger
+        image: jaegertracing/all-in-one:latest
+        environment:
+            - COLLECTOR_OTLP_ENABLED=true
+            - LOG_LEVEL=warn
+        ports:
+            - '16686:16686' # Jaeger UI
+            - '4317:4317' # OTLP gRPC receiver
+            - '4318:4318' # OTLP HTTP receiver
+        restart: unless-stopped
