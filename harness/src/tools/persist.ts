@@ -9,11 +9,46 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { filterPiiFromFinding } from '../governance/index.js';
 import { getCurrentAuthContext } from '../auth/context.js';
 import { setAuthAttributes, getActiveSpan } from '../observability/span.js';
+
+/**
+ * Compute a stable server-side idempotency key for a finding. Retried calls
+ * from durable workflows produce the same key and dedupe via the unique index
+ * uniq_findings_idempotency_key. The MCP contract is unchanged — callers do
+ * not provide the key, the harness derives it from the existing inputs.
+ */
+function computeFindingIdempotencyKey(
+	sessionId: string,
+	agentId: string,
+	finding: string,
+	confidence: string,
+	dataSources: string[] | null | undefined,
+): string {
+	const sources = (dataSources ?? []).slice().sort().join(',');
+	return createHash('sha256').update(`${sessionId}|${agentId}|${finding}|${confidence}|${sources}`).digest('hex');
+}
+
+/**
+ * Compute a stable server-side idempotency key for an outcome. Phase 1c:
+ * closes the narrow crash window where a workflow step inserts the outcome
+ * but crashes before DBOS confirms step completion. On replay, the same key
+ * is computed and the unique index uniq_outcomes_idempotency_key dedupes.
+ * MCP contract unchanged.
+ */
+function computeOutcomeIdempotencyKey(
+	sessionId: string,
+	question: string,
+	decisionSummary: string,
+	agentsInvolved: string[],
+): string {
+	const agents = agentsInvolved.slice().sort().join(',');
+	return createHash('sha256').update(`${sessionId}|${question}|${decisionSummary}|${agents}`).digest('hex');
+}
 
 let loader: ScenarioLoader | null = null;
 
@@ -45,9 +80,19 @@ export function registerPersistTools(server: McpServer) {
 			}
 			try {
 				const safeFinding = filterPiiFromFinding(finding);
+				// Phase 1c: server-side idempotency. Durable workflow steps that
+				// retry write_finding produce the same key, so ON CONFLICT dedupes.
+				const idempotencyKey = computeFindingIdempotencyKey(
+					session_id,
+					agent_id,
+					safeFinding,
+					confidence,
+					data_sources,
+				);
 				const result = await executeQuery(
-					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources, auth_method, token_hash, correlation_id)
-					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources, auth_method, token_hash, correlation_id, idempotency_key)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 					 RETURNING finding_id, created_at`,
 					[
 						session_id,
@@ -58,11 +103,21 @@ export function registerPersistTools(server: McpServer) {
 						ctx.authMethod,
 						ctx.tokenHash,
 						ctx.sessionId,
+						idempotencyKey,
 					],
 				);
-				if (span)
-					span.setAttribute('dazense.finding.id', (result.rows[0] as { finding_id: number }).finding_id);
-				const row = result.rows[0] as { finding_id: number; created_at: string };
+				let row: { finding_id: number; created_at: string };
+				if (result.rowCount > 0) {
+					row = result.rows[0] as { finding_id: number; created_at: string };
+				} else {
+					// Dedupe hit — fetch the existing row for an idempotent response shape
+					const existing = await executeQuery(
+						`SELECT finding_id, created_at FROM decision_findings WHERE idempotency_key = $1 LIMIT 1`,
+						[idempotencyKey],
+					);
+					row = existing.rows[0] as { finding_id: number; created_at: string };
+				}
+				if (span) span.setAttribute('dazense.finding.id', row.finding_id);
 				return {
 					content: [
 						{
@@ -520,11 +575,16 @@ export function registerPersistTools(server: McpServer) {
 
 				const safeSummary = filterPiiFromFinding(decision_summary);
 				const safeReasoning = filterPiiFromFinding(reasoning);
+				// Phase 1c: server-side outcome idempotency. Retried workflow steps
+				// produce the same key, so ON CONFLICT dedupes and the replay path
+				// fetches the existing row.
+				const idempotencyKey = computeOutcomeIdempotencyKey(session_id, question, safeSummary, agents_involved);
 				const result = await executeQuery(
 					`INSERT INTO decision_outcomes (session_id, question, decision_summary, reasoning, confidence,
 					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids,
-					   auth_method, token_hash, correlation_id)
-					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[], $12, $13, $14)
+					   auth_method, token_hash, correlation_id, idempotency_key)
+					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[], $12, $13, $14, $15)
+					 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 					 RETURNING outcome_id, created_at`,
 					[
 						session_id,
@@ -541,9 +601,20 @@ export function registerPersistTools(server: McpServer) {
 						ctx.authMethod,
 						ctx.tokenHash,
 						ctx.sessionId,
+						idempotencyKey,
 					],
 				);
-				const row = result.rows[0] as { outcome_id: number; created_at: string };
+				let row: { outcome_id: number; created_at: string };
+				if (result.rowCount > 0) {
+					row = result.rows[0] as { outcome_id: number; created_at: string };
+				} else {
+					// Dedupe hit — fetch the existing row for an idempotent response shape
+					const existing = await executeQuery(
+						`SELECT outcome_id, created_at FROM decision_outcomes WHERE idempotency_key = $1 LIMIT 1`,
+						[idempotencyKey],
+					);
+					row = existing.rows[0] as { outcome_id: number; created_at: string };
+				}
 
 				// Update all proposals in this session to completed
 				if (evidence_proposal_ids?.length) {

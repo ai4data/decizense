@@ -3,9 +3,65 @@
  *
  * Provides a callLLM function that handles the tool-calling loop.
  * All agents use this instead of duplicating LLM code.
+ *
+ * Test/dev mock: set DAZENSE_LLM_MOCK=true to bypass real LLM calls and
+ * return deterministic canned answers. This makes Phase 1c crash recovery
+ * tests hermetic. The mock is REFUSED when DAZENSE_PROFILE=production —
+ * production profile must use a real LLM (enforced by assertMockAllowed).
  */
 
 type QueryFn = (sql: string, reason: string) => Promise<unknown>;
+
+// ─── Mock mode (dev/test only) ─────────────────────────────────────────────
+
+function isMockEnabled(): boolean {
+	return process.env.DAZENSE_LLM_MOCK === 'true';
+}
+
+function assertMockAllowed(): void {
+	if (process.env.DAZENSE_PROFILE === 'production') {
+		throw new Error(
+			'DAZENSE_LLM_MOCK=true is refused under DAZENSE_PROFILE=production. Use a real LLM in production.',
+		);
+	}
+}
+
+let mockWarningLogged = false;
+function logMockWarningOnce(): void {
+	if (mockWarningLogged) return;
+	console.error('[llm] WARNING: DAZENSE_LLM_MOCK=true - deterministic canned responses are used, no real LLM calls.');
+	mockWarningLogged = true;
+}
+
+/**
+ * Deterministic canned response for tests. Shape mirrors a real LLM answer
+ * so orchestrator logic treats it identically. The mock recognizes a couple
+ * of prompt patterns used by the orchestrator workflow and returns predictable
+ * JSON for planning / combining.
+ */
+function mockLlmResponse(systemPrompt: string, question: string): string {
+	// Planner prompt (orchestrator.ts builds this): "You are an orchestrator
+	// that decomposes complex questions... Respond ONLY with a JSON object..."
+	if (systemPrompt.includes('decomposes complex questions')) {
+		return JSON.stringify({
+			agents: [
+				{ id: 'flight_ops', sub_question: 'Mock flight check for: ' + question.slice(0, 60) },
+				{ id: 'booking', sub_question: 'Mock booking check for: ' + question.slice(0, 60) },
+			],
+		});
+	}
+
+	// Combiner prompt: "You are an orchestrator combining findings..."
+	if (systemPrompt.includes('combining findings')) {
+		return (
+			'MOCK DECISION: analyzed findings from sub-agents. ' +
+			'Recommended action: verify with real data. Confidence: medium.'
+		);
+	}
+
+	// Sub-agent mock — return a canned finding text without invoking any tools
+	return 'MOCK FINDING for "' + question.slice(0, 80) + '" - canned sub-agent response for deterministic tests';
+}
 
 async function callAzureChat(
 	messages: Array<{ role: string; content: string | null; tool_calls?: any[]; tool_call_id?: string }>,
@@ -49,6 +105,14 @@ export async function callLLM(
 	queryFn: QueryFn,
 	maxSteps = 12,
 ): Promise<string> {
+	if (isMockEnabled()) {
+		assertMockAllowed();
+		logMockWarningOnce();
+		// Mock bypasses the tool loop entirely — deterministic for tests.
+		void queryFn; // explicitly not called in mock mode
+		return mockLlmResponse(systemPrompt, question);
+	}
+
 	const tools = [
 		{
 			type: 'function',

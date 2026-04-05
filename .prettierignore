@@ -19,7 +19,8 @@ routeTree.gen.ts
 **/.dazenseignore
 .venv-om/
 
-# Phase 0 / 1a / 1b verification evidence — raw Jaeger API dumps, preserve as-is
+# Phase 0 / 1a / 1b / 1c verification evidence — raw Jaeger API dumps, preserve as-is
 docs/phase-0-verification/**
 docs/phase-1a-verification/**
 docs/phase-1b-verification/**
+docs/phase-1c-verification/**

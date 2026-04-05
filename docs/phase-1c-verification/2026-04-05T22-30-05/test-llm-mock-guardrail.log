@@ -1,0 +1,5 @@
+🛡️  LLM Mock Production Guardrail Test
+
+Caught error: DAZENSE_LLM_MOCK=true is refused under DAZENSE_PROFILE=production. Use a real LLM in production.
+
+✅ PASS - production guardrail refused the mock as expected
