@@ -3,6 +3,9 @@
  *
  * Starts the harness MCP server as a child process and provides
  * typed tool wrappers that agents can call.
+ *
+ * Identity flows via AGENT_TOKEN/AGENT_ID environment variables
+ * to the child process — never as tool arguments visible to the model.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -11,24 +14,35 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 export class HarnessClient {
 	private client: Client;
 	private transport: StdioClientTransport | null = null;
+	private agentId: string;
+	private token: string | undefined;
 
-	constructor() {
+	constructor(agentId: string, token?: string) {
 		this.client = new Client({ name: 'dazense-agent', version: '0.1.0' }, { capabilities: {} });
+		this.agentId = agentId;
+		this.token = token;
 	}
 
 	/**
 	 * Connect to the harness MCP server.
-	 * Starts the harness as a child process via stdio transport.
+	 * Passes AGENT_TOKEN and AGENT_ID via environment — never as tool args.
 	 */
 	async connect(scenarioPath: string) {
+		const env: Record<string, string> = {
+			...(process.env as Record<string, string>),
+			SCENARIO_PATH: scenarioPath,
+			AGENT_ID: this.agentId,
+		};
+
+		if (this.token) {
+			env.AGENT_TOKEN = this.token;
+		}
+
 		this.transport = new StdioClientTransport({
 			command: 'npx',
 			args: ['tsx', 'src/server.ts'],
 			cwd: '../harness',
-			env: {
-				...process.env,
-				SCENARIO_PATH: scenarioPath,
-			},
+			env,
 		});
 
 		await this.client.connect(this.transport);
@@ -55,11 +69,12 @@ export class HarnessClient {
 	}
 
 	/**
-	 * Initialize an agent — get identity, scope, rules, constraints.
+	 * Initialize the agent — get identity, scope, rules, constraints.
+	 * agent_id is passed for validation (must match AGENT_ID env).
 	 */
-	async initializeAgent(agentId: string, sessionId: string, question?: string) {
+	async initializeAgent(sessionId: string, question?: string) {
 		return this.callTool('initialize_agent', {
-			agent_id: agentId,
+			agent_id: this.agentId,
 			session_id: sessionId,
 			question,
 		});
@@ -67,13 +82,10 @@ export class HarnessClient {
 
 	/**
 	 * Execute a governed SQL query.
+	 * agent_id comes from AuthContext (env), not from this call.
 	 */
-	async queryData(agentId: string, sql: string, reason?: string) {
-		return this.callTool('query_data', {
-			agent_id: agentId,
-			sql,
-			reason,
-		});
+	async queryData(sql: string, reason?: string) {
+		return this.callTool('query_data', { sql, reason });
 	}
 
 	/**
@@ -88,17 +100,16 @@ export class HarnessClient {
 
 	/**
 	 * Write a finding to the shared workspace.
+	 * agent_id comes from AuthContext (env), not from this call.
 	 */
 	async writeFinding(
 		sessionId: string,
-		agentId: string,
 		finding: string,
 		confidence: 'high' | 'medium' | 'low',
 		dataSources?: string[],
 	) {
 		return this.callTool('write_finding', {
 			session_id: sessionId,
-			agent_id: agentId,
 			finding,
 			confidence,
 			data_sources: dataSources,

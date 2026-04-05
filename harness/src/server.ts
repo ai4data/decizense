@@ -24,6 +24,7 @@ import { ScenarioLoader } from './config/index.js';
 import { initCatalog } from './catalog/index.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { initGovernance } from './governance/index.js';
+import { resolveAuthContext, AuthError } from './auth/context.js';
 import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
@@ -79,6 +80,15 @@ async function main() {
 			console.error('[harness] Catalog: not configured (using YAML only)');
 		}
 
+		// Initialize auth context (must be before tool registration)
+		const authCtx = await resolveAuthContext(loader);
+		const authMode = scenario.auth?.mode ?? 'config-only';
+		if (authCtx.agentId) {
+			console.error(`[harness] Auth: ${authMode} | agent=${authCtx.agentId} | uri=${authCtx.agentUri}`);
+		} else {
+			console.error(`[harness] Auth: ${authMode} (agent identity will be set by initialize_agent)`);
+		}
+
 		// Initialize all engines
 		initGovernance(scenarioPath);
 		initContextTools(scenarioPath);
@@ -95,6 +105,11 @@ async function main() {
 		const piiCount = Object.values(policy.pii.columns).flat().length;
 		console.error(`[harness] Policy: ${piiCount} PII columns blocked, max ${policy.defaults.max_rows} rows`);
 	} catch (err) {
+		// Auth errors are fatal — never fall through to scaffold mode
+		if (err instanceof AuthError) {
+			console.error(`[harness] FATAL: ${err.message}`);
+			process.exit(1);
+		}
 		console.error(`[harness] Warning: Could not load scenario config: ${(err as Error).message}`);
 		console.error(`[harness] Running with scaffold responses only`);
 	}

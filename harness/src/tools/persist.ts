@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { filterPiiFromFinding } from '../governance/index.js';
+import { getAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -27,19 +28,29 @@ export function registerPersistTools(server: McpServer) {
 		'Store an intermediate finding for the current session (shared workspace)',
 		{
 			session_id: z.string().describe('Current decision session ID'),
-			agent_id: z.string().describe('Agent writing the finding'),
 			finding: z.string().describe('The finding content (PII must not be included)'),
 			confidence: z.enum(['high', 'medium', 'low']).describe('Confidence in this finding'),
 			data_sources: z.array(z.string()).optional().describe('Tables/measures used'),
 		},
-		async ({ session_id, agent_id, finding, confidence, data_sources }) => {
+		async ({ session_id, finding, confidence, data_sources }) => {
+			const ctx = getAuthContext();
+			const agent_id = ctx.agentId;
 			try {
 				const safeFinding = filterPiiFromFinding(finding);
 				const result = await executeQuery(
-					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources)
-					 VALUES ($1, $2, $3, $4, $5)
+					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources, auth_method, token_hash, correlation_id)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 					 RETURNING finding_id, created_at`,
-					[session_id, agent_id, safeFinding, confidence, data_sources ?? null],
+					[
+						session_id,
+						agent_id,
+						safeFinding,
+						confidence,
+						data_sources ?? null,
+						ctx.authMethod,
+						ctx.tokenHash,
+						ctx.sessionId,
+					],
 				);
 				const row = result.rows[0] as { finding_id: number; created_at: string };
 				return {
@@ -118,7 +129,6 @@ export function registerPersistTools(server: McpServer) {
 		'Propose a decision with evidence links to events, signals, and rules',
 		{
 			session_id: z.string().describe('Current session ID'),
-			agent_id: z.string().describe('Agent proposing the decision'),
 			proposed_action: z.string().describe('What action is proposed'),
 			confidence: z.enum(['high', 'medium', 'low']).describe('Confidence in the proposal'),
 			risk_class: z.enum(['low', 'medium', 'high', 'critical']).describe('Risk classification'),
@@ -128,7 +138,6 @@ export function registerPersistTools(server: McpServer) {
 		},
 		async ({
 			session_id,
-			agent_id,
 			proposed_action,
 			confidence,
 			risk_class,
@@ -136,6 +145,8 @@ export function registerPersistTools(server: McpServer) {
 			evidence_signal_types,
 			evidence_rules,
 		}) => {
+			const ctx = getAuthContext();
+			const agent_id = ctx.agentId;
 			try {
 				// Validate evidence links before storing
 				const validationErrors: string[] = [];
@@ -188,8 +199,8 @@ export function registerPersistTools(server: McpServer) {
 
 				const result = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
-					   evidence_event_ids, evidence_signal_types, evidence_rules)
-					 VALUES ($1, $2, $3, $4, $5, $6::integer[], $7::text[], $8::text[])
+					   evidence_event_ids, evidence_signal_types, evidence_rules, auth_method, token_hash, correlation_id)
+					 VALUES ($1, $2, $3, $4, $5, $6::integer[], $7::text[], $8::text[], $9, $10, $11)
 					 RETURNING proposal_id, status, created_at`,
 					[
 						session_id,
@@ -200,6 +211,9 @@ export function registerPersistTools(server: McpServer) {
 						evidence_event_ids ?? null,
 						evidence_signal_types ?? null,
 						evidence_rules ?? null,
+						ctx.authMethod,
+						ctx.tokenHash,
+						ctx.sessionId,
 					],
 				);
 				const row = result.rows[0] as { proposal_id: number; status: string; created_at: string };
@@ -444,6 +458,7 @@ export function registerPersistTools(server: McpServer) {
 			evidence_signal_types,
 			evidence_proposal_ids,
 		}) => {
+			const ctx = getAuthContext();
 			try {
 				// Validate evidence links
 				const validationErrors: string[] = [];
@@ -491,8 +506,9 @@ export function registerPersistTools(server: McpServer) {
 				const safeReasoning = filterPiiFromFinding(reasoning);
 				const result = await executeQuery(
 					`INSERT INTO decision_outcomes (session_id, question, decision_summary, reasoning, confidence,
-					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids)
-					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[])
+					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids,
+					   auth_method, token_hash, correlation_id)
+					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[], $12, $13, $14)
 					 RETURNING outcome_id, created_at`,
 					[
 						session_id,
@@ -506,6 +522,9 @@ export function registerPersistTools(server: McpServer) {
 						evidence_rules ?? null,
 						evidence_signal_types ?? null,
 						evidence_proposal_ids ?? null,
+						ctx.authMethod,
+						ctx.tokenHash,
+						ctx.sessionId,
 					],
 				);
 				const row = result.rows[0] as { outcome_id: number; created_at: string };
@@ -582,11 +601,11 @@ export function registerPersistTools(server: McpServer) {
 		'save_memory',
 		'Save agent memory that persists across sessions',
 		{
-			agent_id: z.string().describe('Agent saving the memory'),
 			key: z.string().describe('Memory key (topic or category)'),
 			content: z.string().describe('Memory content to persist'),
 		},
-		async ({ agent_id, key, content }) => {
+		async ({ key, content }) => {
+			const agent_id = getAuthContext().agentId;
 			try {
 				const safeContent = filterPiiFromFinding(content);
 				await executeQuery(
@@ -625,7 +644,6 @@ export function registerPersistTools(server: McpServer) {
 		'recall_memory',
 		'Retrieve memories — legacy KV + structured memory_entries with scope filtering',
 		{
-			agent_id: z.string().describe('Agent recalling memory'),
 			key: z.string().optional().describe('Specific key for legacy memory, or keyword for structured search'),
 			scope: z
 				.enum(['agent', 'bundle', 'global', 'all'])
@@ -633,7 +651,8 @@ export function registerPersistTools(server: McpServer) {
 				.default('all')
 				.describe('Scope filter for structured memories'),
 		},
-		async ({ agent_id, key, scope }) => {
+		async ({ key, scope }) => {
+			const agent_id = getAuthContext().agentId;
 			try {
 				// Legacy KV memory
 				let legacySql: string;

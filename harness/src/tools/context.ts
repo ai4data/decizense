@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { getCatalogClient } from '../catalog/index.js';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
+import { getAuthContext } from '../auth/context.js';
 
 let loader: ScenarioLoader | null = null;
 
@@ -31,9 +32,9 @@ export function registerContextTools(server: McpServer) {
 		'Get assembled context for a question — entities, rules, freshness, precedent from catalog',
 		{
 			question: z.string().describe('The business question to get context for'),
-			agent_id: z.string().optional().describe("The requesting agent's identifier"),
 		},
-		async ({ question, agent_id }) => {
+		async ({ question }) => {
+			const agent_id = getAuthContext().agentId || 'unknown';
 			const catalog = getCatalogClient();
 
 			if (!catalog) {
@@ -91,7 +92,7 @@ export function registerContextTools(server: McpServer) {
 						text: JSON.stringify(
 							{
 								question,
-								agent_id: agent_id ?? 'unknown',
+								agent_id,
 								source: 'catalog',
 								matched_glossary_terms: matchedTerms.map((t) => ({
 									name: t.name,

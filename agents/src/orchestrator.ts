@@ -21,10 +21,18 @@ const SESSION_ID = `session-${Date.now()}`;
 
 // Domain agent runner — spawns a harness connection and runs one agent
 async function runDomainAgent(agentId: string, subQuestion: string, sessionId: string): Promise<string> {
-	const harness = new HarnessClient();
+	// Each domain agent gets its own token from env
+	const tokenEnvMap: Record<string, string> = {
+		flight_ops: 'OPS_TOKEN',
+		booking: 'BOOKING_TOKEN',
+		customer_service: 'CUSTOMER_TOKEN',
+	};
+	const token = process.env[tokenEnvMap[agentId] ?? ''];
+
+	const harness = new HarnessClient(agentId, token);
 	await harness.connect('../scenario/travel');
 
-	const init = (await harness.initializeAgent(agentId, sessionId, subQuestion)) as any;
+	const init = (await harness.initializeAgent(sessionId, subQuestion)) as any;
 	if (!init.identity?.authenticated) {
 		await harness.close();
 		return `Agent ${agentId} not found`;
@@ -46,11 +54,11 @@ ${rulesContext ? `Rules:\n${rulesContext}` : ''}
 ONLY query tables in your bundle. Be concise. Return a factual finding.`;
 
 	const answer = await callLLM(systemPrompt, subQuestion, async (sql: string, reason: string) => {
-		return await harness.queryData(agentId, sql, reason);
+		return await harness.queryData(sql, reason);
 	});
 
 	// Write finding to shared workspace
-	await harness.writeFinding(sessionId, agentId, answer, 'high', init.scope.tables ?? []);
+	await harness.writeFinding(sessionId, answer, 'high', init.scope.tables ?? []);
 
 	await harness.close();
 	return answer;
@@ -63,13 +71,11 @@ async function main() {
 
 	// ── Step 1: Get context from harness ──
 	console.log('Step 1: Getting context...');
-	const harness = new HarnessClient();
+	const token = process.env.ORCHESTRATOR_TOKEN;
+	const harness = new HarnessClient('orchestrator', token);
 	await harness.connect('../scenario/travel');
 
-	const context = (await harness.callTool('get_context', {
-		question,
-		agent_id: 'orchestrator',
-	})) as any;
+	const context = (await harness.callTool('get_context', { question })) as any;
 
 	const glossaryTerms = context.matched_glossary_terms ?? [];
 	if (glossaryTerms.length > 0) {
@@ -79,18 +85,26 @@ async function main() {
 	// ── Step 2: Plan — which agents to involve ──
 	console.log('\nStep 2: Planning...');
 
-	// Get available agents from harness (config-driven, not hardcoded)
-	const orchestratorInit = (await harness.initializeAgent('orchestrator', SESSION_ID, question)) as any;
+	const orchestratorInit = (await harness.initializeAgent(SESSION_ID, question)) as any;
 	const delegateTo = orchestratorInit.constraints?.can_delegate_to ?? [];
 
-	// Get agent details for planning prompt
+	// Get agent details for planning prompt (each needs its own connection)
 	const agentDescriptions: string[] = [];
 	for (const agentId of delegateTo) {
-		const agentInit = (await harness.initializeAgent(agentId, SESSION_ID)) as any;
+		const tokenEnvMap: Record<string, string> = {
+			flight_ops: 'OPS_TOKEN',
+			booking: 'BOOKING_TOKEN',
+			customer_service: 'CUSTOMER_TOKEN',
+		};
+		const agentToken = process.env[tokenEnvMap[agentId] ?? ''];
+		const agentHarness = new HarnessClient(agentId, agentToken);
+		await agentHarness.connect('../scenario/travel');
+		const agentInit = (await agentHarness.initializeAgent(SESSION_ID)) as any;
 		if (agentInit.identity?.authenticated) {
 			const tables = agentInit.scope?.tables?.join(', ') ?? 'none';
 			agentDescriptions.push(`- ${agentId}: ${agentInit.identity.display_name} (tables: ${tables})`);
 		}
+		await agentHarness.close();
 	}
 
 	// Use LLM to decompose the question into sub-tasks

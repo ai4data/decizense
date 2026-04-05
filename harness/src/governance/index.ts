@@ -19,6 +19,7 @@
 
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
 import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
+import { getAuthContext } from '../auth/context.js';
 
 // ─── Types ───
 
@@ -123,9 +124,30 @@ export function initGovernance(scenarioPath: string) {
 
 /**
  * Authenticate an agent and return its identity.
+ *
+ * Defense in depth: if agentId is provided, verify it matches the connection's
+ * AuthContext. This catches any future tool that forgets to resolve identity
+ * from AuthContext and instead passes a param through.
  */
 export function authenticateAgent(agentId: string): AgentIdentity {
 	if (!loader) throw new Error('Governance not initialized');
+
+	// Cross-check against AuthContext (connection-bound identity)
+	try {
+		const ctx = getAuthContext();
+		if (ctx.agentId && ctx.agentId !== agentId) {
+			return {
+				agent_id: agentId,
+				role: 'domain',
+				bundle: null,
+				display_name: 'Identity mismatch',
+				can_query: false,
+				authenticated: false,
+			};
+		}
+	} catch {
+		// AuthContext not initialized — allowed only during startup/tests
+	}
 
 	const agents = loader.agents;
 	const agent = agents.agents[agentId];
@@ -153,9 +175,13 @@ export function authenticateAgent(agentId: string): AgentIdentity {
 
 /**
  * Run the full governance pipeline on a query.
+ *
+ * agent_id is resolved from AuthContext (connection-bound identity).
+ * If params.agent_id is passed, it must match AuthContext — this is a
+ * defense-in-depth check against tools that accidentally trust caller input.
  */
 export async function evaluateGovernance(params: {
-	agent_id: string;
+	agent_id?: string;
 	sql?: string;
 	tables?: string[];
 	columns?: string[];
@@ -167,21 +193,44 @@ export async function evaluateGovernance(params: {
 	const warnings: string[] = [];
 	const blockedColumns: string[] = [];
 
+	// ── Resolve agent_id from AuthContext (authoritative) ──
+	let agentId: string;
+	try {
+		agentId = getAuthContext().agentId;
+		if (params.agent_id && params.agent_id !== agentId) {
+			return {
+				allowed: false,
+				reason: `Identity mismatch: caller passed "${params.agent_id}" but connection is authenticated as "${agentId}"`,
+				checks: [{ name: 'authenticate', passed: false, detail: 'identity mismatch' }],
+			};
+		}
+	} catch {
+		// AuthContext not initialized — fall back to params for edge cases
+		if (!params.agent_id) {
+			return {
+				allowed: false,
+				reason: 'No authenticated identity available',
+				checks: [{ name: 'authenticate', passed: false, detail: 'no AuthContext, no agent_id' }],
+			};
+		}
+		agentId = params.agent_id;
+	}
+
 	// ── 1. Authenticate agent ──
-	const identity = authenticateAgent(params.agent_id);
+	const identity = authenticateAgent(agentId);
 	checks.push({
 		name: 'authenticate',
 		passed: identity.authenticated,
-		detail: identity.authenticated ? `Agent ${params.agent_id} authenticated` : 'Unknown agent',
+		detail: identity.authenticated ? `Agent ${agentId} authenticated` : 'Unknown agent',
 	});
 	if (!identity.authenticated) {
-		return { allowed: false, reason: `Unknown agent: ${params.agent_id}`, checks };
+		return { allowed: false, reason: `Unknown agent: ${agentId}`, checks };
 	}
 
 	// ── 2. Check agent can query ──
 	if (!identity.can_query) {
 		checks.push({ name: 'can_query', passed: false, detail: 'Agent role does not permit queries' });
-		return { allowed: false, reason: `Agent ${params.agent_id} (${identity.role}) cannot execute queries`, checks };
+		return { allowed: false, reason: `Agent ${agentId} (${identity.role}) cannot execute queries`, checks };
 	}
 	checks.push({ name: 'can_query', passed: true });
 
