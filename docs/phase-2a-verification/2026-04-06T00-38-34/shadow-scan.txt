@@ -1,0 +1,2 @@
+=== shadow mismatch scan ===
+[opa-shadow] MISMATCH agent=customer_service tool=query_data in_code=true opa=false

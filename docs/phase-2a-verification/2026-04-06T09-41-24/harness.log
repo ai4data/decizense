@@ -1,0 +1,22 @@
+
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+Error [TransformError]: The package "@esbuild/linux-x64" could not be found, and is needed by esbuild.
+
+If you are installing esbuild with npm, make sure that you don't specify the
+"--no-optional" or "--omit=optional" flags. The "optionalDependencies" feature
+of "package.json" is used by esbuild to install the correct binary executable
+for your current platform.
+    at generateBinPath (/mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/esbuild/lib/main.js:2040:15)
+    at esbuildCommandAndArgs (/mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/esbuild/lib/main.js:2110:33)
+    at ensureServiceIsRunning (/mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/esbuild/lib/main.js:2267:25)
+    at transform (/mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/esbuild/lib/main.js:2168:37)
+    at file:///mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/tsx/dist/index-7AaEi15b.mjs:14:2865
+    at applyTransformers (file:///mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/tsx/dist/index-7AaEi15b.mjs:14:1266)
+    at transform (file:///mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/tsx/dist/index-7AaEi15b.mjs:14:2812)
+    at load (file:///mnt/c/Users/hzmarrou/OneDrive/python/learning/dazense-context-infrastructure/harness/node_modules/tsx/dist/esm/index.mjs?1775461288112:2:2348)
+    at async nextLoad (node:internal/modules/esm/hooks:785:22)
+    at async AsyncLoaderHooksOnLoaderHookWorker.load (node:internal/modules/esm/hooks:410:20)
+
+Node.js v24.13.1

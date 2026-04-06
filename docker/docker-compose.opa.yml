@@ -1,0 +1,44 @@
+# Local OPA sidecar for dazense governance — Plan v3 Phase 2.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.opa.yml up -d
+#
+# Endpoints:
+#   - REST API:       http://localhost:8181
+#   - Health:         http://localhost:8181/health
+#   - Decision API:   http://localhost:8181/v1/data/dazense/governance/result
+#
+# The harness queries OPA for every query_data / query_metrics governance
+# evaluation. In Phase 2a OPA runs in SHADOW mode: the harness logs
+# disagreements with the in-code result but still uses the in-code result.
+#
+# The ../policy directory (repo-rooted) is mounted read-only. OPA serves
+# dazense.rego + data.json from that directory; rebuild data.json with
+# ./policy/build.sh whenever the scenario YAMLs change, then restart this
+# container to pick up the new bundle.
+#
+# We do NOT use OPA's native decision-log sink. Decision logs are written
+# from the harness TS side (Phase 2c) so the log row and the harness
+# response reflect the exact same result — one fewer moving part.
+
+services:
+    opa:
+        container_name: dazense_opa
+        image: openpolicyagent/opa:1.4.2
+        command:
+            - 'run'
+            - '--server'
+            - '--addr=0.0.0.0:8181'
+            - '--log-level=info'
+            - '--set=decision_logs.console=false'
+            - '/policy'
+        ports:
+            - '8181:8181'
+        volumes:
+            - ../policy:/policy:ro
+        restart: unless-stopped
+        # No Docker-level healthcheck: the official OPA image is distroless
+        # (no shell, no wget/curl), so there's no in-container probe tool to
+        # invoke. The harness performs a real HTTP health check at startup
+        # (see harness/src/governance/opa-client.ts) and fails fast if OPA
+        # is unreachable — that's the authoritative liveness gate.

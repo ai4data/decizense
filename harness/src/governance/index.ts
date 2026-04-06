@@ -20,6 +20,7 @@
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
 import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
 import { getAuthContext, type AuthContext } from '../auth/context.js';
+import { shadowCompare, type ShadowParsedSql } from './shadow.js';
 
 // ─── Types ───
 
@@ -58,6 +59,9 @@ interface ParsedSql {
 	limitValue: number | null;
 	isReadOnly: boolean;
 	statementCount: number;
+	// Parsed JOIN conditions, column names only (table prefixes stripped).
+	// Added in Phase 2a so the shadow evaluator can feed them to OPA.
+	joins: Array<{ leftCol: string; rightCol: string }>;
 }
 
 function parseSql(sql: string): ParsedSql {
@@ -104,6 +108,18 @@ function parseSql(sql: string): ParsedSql {
 	const hasLimit = limitMatch !== null;
 	const limitValue = limitMatch ? parseInt(limitMatch[1], 10) : null;
 
+	// JOIN parsing — mirror the regex used in the in-code bundle-scope check
+	// (line ~320) but emit structured output. Column names are lowercased and
+	// table/alias prefixes stripped to match the existing allow-list format.
+	const joinPattern = /JOIN\s+\S+\s+\S*\s*ON\s+(\S+)\s*=\s*(\S+)/gi;
+	const joins: Array<{ leftCol: string; rightCol: string }> = [];
+	let jMatch: RegExpExecArray | null;
+	while ((jMatch = joinPattern.exec(sql)) !== null) {
+		const leftCol = jMatch[1].toLowerCase().replace(/\w+\./, '');
+		const rightCol = jMatch[2].toLowerCase().replace(/\w+\./, '');
+		joins.push({ leftCol, rightCol });
+	}
+
 	return {
 		tables: [...new Set(tables)],
 		columns,
@@ -111,6 +127,7 @@ function parseSql(sql: string): ParsedSql {
 		limitValue,
 		isReadOnly,
 		statementCount: statements.length,
+		joins,
 	};
 }
 
@@ -186,14 +203,55 @@ export function authenticateAgent(agentId: string): AgentIdentity {
  * Mismatches between `agent_id` and `authContext.agentId` trigger an identity
  * mismatch error (defense in depth).
  */
-export async function evaluateGovernance(params: {
+export interface EvaluateGovernanceParams {
 	authContext?: AuthContext;
 	agent_id?: string;
 	sql?: string;
 	tables?: string[];
 	columns?: string[];
 	metric_refs?: string[];
-}): Promise<GovernanceResult> {
+}
+
+/**
+ * Phase 2a wrapper: calls the internal in-code pipeline, then (if
+ * OPA_SHADOW=true) fires a fire-and-forget comparison against the OPA
+ * sidecar. The in-code result is always returned — shadow mode does not
+ * affect the request path. Phase 2b will replace the internal call with a
+ * direct opa-client.evaluate().
+ */
+export async function evaluateGovernance(params: EvaluateGovernanceParams): Promise<GovernanceResult> {
+	const result = await evaluateGovernanceInternal(params);
+
+	if (process.env.OPA_SHADOW === 'true') {
+		const agentId =
+			params.authContext?.agentId ??
+			params.agent_id ??
+			(() => {
+				try {
+					return getAuthContext().agentId;
+				} catch {
+					return '';
+				}
+			})();
+		const parsedForShadow: ShadowParsedSql | null = params.sql ? parseSql(params.sql) : null;
+		// Fire-and-forget: await a no-throw promise so Node doesn't warn about
+		// unhandled rejections, but we don't delay the caller.
+		void shadowCompare(
+			{
+				agentId,
+				toolName: params.sql ? 'query_data' : 'query_metrics',
+				sql: params.sql ?? null,
+				metricRefs: params.metric_refs ?? [],
+				parsed: parsedForShadow,
+			},
+			result,
+		);
+	}
+
+	return result;
+}
+
+async function evaluateGovernanceInternal(params: EvaluateGovernanceParams): Promise<GovernanceResult> {
 	if (!loader) throw new Error('Governance not initialized');
 
 	const checks: GovernanceCheck[] = [];
