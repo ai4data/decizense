@@ -22,7 +22,8 @@ export interface AuthConfig {
 	introspection_url?: string;
 	/** Phase 3: if true, tokens WITH an act claim are required. Tokens without act are rejected. */
 	require_delegation?: boolean;
-	/** Phase 3: JWT claim name that identifies the agent (default: "sub"). */
+	/** Phase 3: top-level JWT claim name that identifies the agent (default: "sub").
+	 *  Supports top-level keys only (e.g. "azp", "client_id"), not dot-paths. */
 	agent_claim?: string;
 }
 

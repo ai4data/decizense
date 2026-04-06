@@ -139,12 +139,13 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				body: `token=${encodeURIComponent(token)}`,
 			});
 
-			const data = (await resp.json()) as {
+			const data = (await resp.json()) as Record<string, unknown> & {
 				active: boolean;
 				sub?: string;
 				iss?: string;
 				aud?: string | string[];
 				exp?: number;
+				act?: { sub: string; iss?: string };
 			};
 
 			if (!data.active) {
@@ -174,6 +175,8 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				iss: data.iss,
 				aud: Array.isArray(data.aud) ? data.aud[0] : data.aud,
 				exp: data.exp,
+				act: data.act?.sub ? data.act : undefined,
+				claims: data,
 			};
 		} catch (err) {
 			return { valid: false, error: `Introspection failed: ${(err as Error).message}` };
