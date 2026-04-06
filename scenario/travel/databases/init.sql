@@ -354,3 +354,10 @@ CREATE INDEX idx_decision_logs_timestamp ON decision_logs(timestamp);
 -- Add bundle_revision to decision_outcomes so the outcome row links back
 -- to the policy version that governed the session's queries.
 ALTER TABLE decision_outcomes ADD COLUMN IF NOT EXISTS bundle_revision VARCHAR(64);
+
+-- Phase 3: delegation — who authorized this agent to act?
+-- Present when a user delegates to an agent via RFC 8693 token exchange (act claim).
+ALTER TABLE decision_findings ADD COLUMN IF NOT EXISTS delegated_subject VARCHAR(100);
+ALTER TABLE decision_proposals ADD COLUMN IF NOT EXISTS delegated_subject VARCHAR(100);
+ALTER TABLE decision_outcomes ADD COLUMN IF NOT EXISTS delegated_subject VARCHAR(100);
+ALTER TABLE decision_logs ADD COLUMN IF NOT EXISTS delegated_subject VARCHAR(100);

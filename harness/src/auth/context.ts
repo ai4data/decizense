@@ -39,6 +39,11 @@ export interface AuthContext {
 	tokenIssuer: string | null;
 	tokenHash: string | null;
 
+	// RFC 8693 delegation (Phase 3) — who authorized this agent to act?
+	// Present when a user token is exchanged for an agent token with `act` claim.
+	delegatedSubject: string | null;
+	delegationIssuer: string | null;
+
 	// Session correlation
 	sessionId: string | null;
 	authenticatedAt: Date;
@@ -208,25 +213,49 @@ export async function verifyAndBuildContext(
 	if (!result.valid) {
 		throw new AuthError(`Agent token verification failed: ${result.error}`);
 	}
-	if (!result.sub) {
-		throw new AuthError('Agent token missing sub claim — cannot determine agent identity');
+	// Phase 3: agent_claim config allows IdPs that put agent identity in a
+	// claim other than "sub" (e.g. "azp", "client_id"). Default: "sub".
+	const agentClaimName = authConfig.agent_claim ?? 'sub';
+	const agentClaimValue =
+		agentClaimName === 'sub' ? result.sub : (result.claims?.[agentClaimName] as string | undefined);
+
+	if (!agentClaimValue) {
+		throw new AuthError(`Agent token missing "${agentClaimName}" claim — cannot determine agent identity`);
 	}
 
-	const agentId = resolveAgentIdFromSubject(loader, result.sub);
+	const agentId = resolveAgentIdFromSubject(loader, agentClaimValue);
 	if (!agentId) {
-		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
+		throw new AuthError(
+			`Token ${agentClaimName}="${agentClaimValue}" does not match any agent identity.catalog_bot in agents.yml`,
+		);
 	}
 
-	return {
+	// Phase 3: enforce require_delegation if configured
+	if (authConfig.require_delegation && !result.act?.sub) {
+		throw new AuthError(
+			`Token for agent "${agentId}" is missing the act claim. require_delegation is enabled — ` +
+				'tokens must be obtained via RFC 8693 token exchange with a user identity.',
+		);
+	}
+
+	const ctx: AuthContext = {
 		agentId,
 		agentUri: `agent://${trustDomain}/${agentId}`,
 		authMethod: 'jwt',
-		tokenSubject: result.sub,
+		tokenSubject: result.sub ?? null,
 		tokenIssuer: result.iss ?? null,
 		tokenHash: tokenHash(token),
+		delegatedSubject: result.act?.sub ?? null,
+		delegationIssuer: result.act?.iss ?? null,
 		sessionId: null,
 		authenticatedAt: new Date(),
 	};
+
+	if (ctx.delegatedSubject) {
+		process.stderr.write(`[auth] delegation: agent=${agentId} acting on behalf of user=${ctx.delegatedSubject}\n`);
+	}
+
+	return ctx;
 }
 
 /**
@@ -246,6 +275,8 @@ export function buildConfigOnlyContext(loader: ScenarioLoader, agentId: string, 
 		tokenSubject: null,
 		tokenIssuer: null,
 		tokenHash: null,
+		delegatedSubject: null,
+		delegationIssuer: null,
 		sessionId: null,
 		authenticatedAt: new Date(),
 	};
@@ -262,6 +293,8 @@ function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): 
 			tokenSubject: null,
 			tokenIssuer: null,
 			tokenHash: null,
+			delegatedSubject: null,
+			delegationIssuer: null,
 			sessionId: null,
 			authenticatedAt: new Date(),
 		};

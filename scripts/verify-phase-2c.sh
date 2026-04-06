@@ -127,15 +127,25 @@ fi
 echo "  ✓ test-opa-equivalence"
 
 # ── 7. Decision log completeness ──
-# Count governance evaluations that went through OPA (= rows in decision_logs)
+# Count governance evaluations that went through OPA (= rows in decision_logs).
+# test-query contributes 3, test-opa-equivalence contributes ~25 (some rejected
+# at transport before governance), test-auth contributes 0-3. Threshold: >= 20.
 LOG_COUNT=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
     "SELECT COUNT(*) FROM decision_logs")
 echo "decision_logs rows after test battery: ${LOG_COUNT}"
-if [ "${LOG_COUNT}" -lt 3 ]; then
-    echo "FAIL: expected at least 3 decision_log rows (test-query runs 3 governed queries), got ${LOG_COUNT}"
+if [ "${LOG_COUNT}" -lt 20 ]; then
+    echo "FAIL: expected at least 20 decision_log rows, got ${LOG_COUNT}"
     exit 1
 fi
-echo "  ✓ decision log completeness (${LOG_COUNT} rows)"
+# Also verify session_id is populated (architect finding #3)
+NULL_SESSION=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
+    "SELECT COUNT(*) FROM decision_logs WHERE session_id IS NULL")
+echo "decision_logs rows with null session_id: ${NULL_SESSION} (of ${LOG_COUNT})"
+if [ "${NULL_SESSION}" -gt 0 ]; then
+    echo "FAIL: ${NULL_SESSION} decision_log rows have null session_id — session correlation broken"
+    exit 1
+fi
+echo "  ✓ decision log completeness (${LOG_COUNT} rows, 0 null session_id)"
 
 # Dump a sample for evidence
 docker exec -i travel_postgres psql -U travel_admin -d travel_db -c \
@@ -212,6 +222,12 @@ else
     REPLAY_PASS=false
 fi
 
+# Enforce replay result (architect finding #2)
+if [ "${REPLAY_PASS}" != "true" ]; then
+    echo "FAIL: replay drift test did not pass"
+    exit 1
+fi
+
 # ── 9. Stop harness ──
 echo "Stopping harness..."
 kill -TERM "${HARNESS_PID}" 2>/dev/null || true
@@ -231,7 +247,11 @@ trap - EXIT
     echo "- [x] test-auth.ts regression passed"
     echo "- [x] test-opa-equivalence.ts 28/28 passed"
     echo "- [x] decision_logs populated: ${LOG_COUNT} rows"
-    echo "- [x] replay correctly detected policy drift on tightened bundle"
+    if [ "${REPLAY_PASS}" = "true" ]; then
+        echo "- [x] replay correctly detected policy drift on tightened bundle"
+    else
+        echo "- [ ] replay drift test FAILED"
+    fi
     echo ""
     echo "## Decision log sample"
     cat "${EVIDENCE_DIR}/decision-logs-sample.txt" 2>/dev/null || echo "(missing)"

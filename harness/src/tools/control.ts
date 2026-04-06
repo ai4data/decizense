@@ -173,6 +173,7 @@ export function registerControlTools(server: McpServer) {
 									authenticated: true,
 									agent_uri: authCtx.agentUri,
 									auth_method: authCtx.authMethod,
+									delegated_subject: authCtx.delegatedSubject ?? undefined,
 								},
 								system_prompt: agentConfig.system_prompt ?? '',
 								scope: {

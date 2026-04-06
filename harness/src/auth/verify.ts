@@ -19,6 +19,10 @@ export interface VerifyResult {
 	iss?: string;
 	aud?: string;
 	exp?: number;
+	/** RFC 8693 actor claim — present when a user delegates to an agent via token exchange. */
+	act?: { sub: string; iss?: string };
+	/** Raw decoded payload for reading non-standard claims (e.g. agent_claim). */
+	claims?: Record<string, unknown>;
 	error?: string;
 }
 
@@ -42,12 +46,16 @@ export class SharedSecretVerifier implements VerifyStrategy {
 				audience: expectedAudience,
 			}) as jwt.JwtPayload;
 
+			const raw = decoded as Record<string, unknown>;
+			const act = raw.act as { sub: string; iss?: string } | undefined;
 			return {
 				valid: true,
 				sub: decoded.sub,
 				iss: decoded.iss,
 				aud: typeof decoded.aud === 'string' ? decoded.aud : decoded.aud?.[0],
 				exp: decoded.exp,
+				act: act?.sub ? act : undefined,
+				claims: raw,
 			};
 		} catch (err) {
 			return { valid: false, error: (err as Error).message };
@@ -88,12 +96,16 @@ export class JwksVerifier implements VerifyStrategy {
 					return;
 				}
 				const payload = decoded as jwt.JwtPayload;
+				const raw = payload as Record<string, unknown>;
+				const act = raw.act as { sub: string; iss?: string } | undefined;
 				resolve({
 					valid: true,
 					sub: payload.sub,
 					iss: payload.iss,
 					aud: typeof payload.aud === 'string' ? payload.aud : payload.aud?.[0],
 					exp: payload.exp,
+					act: act?.sub ? act : undefined,
+					claims: raw,
 				});
 			});
 		});
@@ -127,12 +139,13 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				body: `token=${encodeURIComponent(token)}`,
 			});
 
-			const data = (await resp.json()) as {
+			const data = (await resp.json()) as Record<string, unknown> & {
 				active: boolean;
 				sub?: string;
 				iss?: string;
 				aud?: string | string[];
 				exp?: number;
+				act?: { sub: string; iss?: string };
 			};
 
 			if (!data.active) {
@@ -162,6 +175,8 @@ export class IntrospectionVerifier implements VerifyStrategy {
 				iss: data.iss,
 				aud: Array.isArray(data.aud) ? data.aud[0] : data.aud,
 				exp: data.exp,
+				act: data.act?.sub ? data.act : undefined,
+				claims: data,
 			};
 		} catch (err) {
 			return { valid: false, error: `Introspection failed: ${(err as Error).message}` };

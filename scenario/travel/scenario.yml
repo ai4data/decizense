@@ -25,3 +25,8 @@ auth:
     verify_strategy: shared_secret
     jwt_secret: "{{ env('JWT_SECRET') }}"
     audience: dazense-harness
+    # Phase 3 delegation: if true, tokens without act claim are rejected.
+    # Enable when using Zitadel or another IdP for RFC 8693 token exchange.
+    require_delegation: false
+    # JWT claim that identifies the agent (default: "sub")
+    agent_claim: sub

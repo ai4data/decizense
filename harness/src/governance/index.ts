@@ -18,7 +18,13 @@
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
 import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
 import { getAuthContext, type AuthContext } from '../auth/context.js';
-import { evaluate as opaEvaluate, getBundleRevision, type OpaInput, type OpaParsedSql } from './opa-client.js';
+import {
+	evaluate as opaEvaluate,
+	getBundleRevision,
+	updateDecisionLogContract,
+	type OpaInput,
+	type OpaParsedSql,
+} from './opa-client.js';
 
 // ─── Types ───
 
@@ -262,8 +268,10 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 				},
 	};
 
-	// ── Evaluate via OPA (authoritative) ──
-	const opaResult = await opaEvaluate(opaInput);
+	// ── Evaluate via OPA (authoritative + Phase 2c decision logging) ──
+	const sessionId = params.authContext?.sessionId ?? null;
+	const delegatedSubject = params.authContext?.delegatedSubject ?? null;
+	const opaResult = await opaEvaluate(opaInput, sessionId ?? undefined, undefined, delegatedSubject);
 	const policyVersion = opaResult.bundle_revision;
 
 	// ── Map OPA result to GovernanceResult ──
@@ -315,6 +323,8 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 
 	// ── Allowed: build contract + collect PII columns for response filtering ──
 	const contractId = `contract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+	// Back-fill the decision log row with the contract_id (best-effort)
+	updateDecisionLogContract(opaResult.opa_decision_id, contractId).catch(() => {});
 	const checks: GovernanceCheck[] = [{ name: 'approved', passed: true, detail: `Contract ${contractId}` }];
 
 	// Defense-in-depth: collect all PII columns for result filtering
