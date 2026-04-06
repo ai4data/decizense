@@ -206,7 +206,7 @@ const cases: Case[] = [
 		agent: 'flight_ops',
 		sql: 'SELECT flight_id FROM flights LIMIT 1; SELECT flight_id FROM flights LIMIT 1',
 		expected: 'block',
-		expectedReasonSubstring: 'Multi-statement',
+		expectedReasonSubstring: 'statements',
 		note: 'two statements separated by ;',
 	},
 
