@@ -20,6 +20,10 @@ export interface AuthConfig {
 	issuer?: string;
 	audience?: string;
 	introspection_url?: string;
+	/** Phase 3: if true, tokens WITH an act claim are required. Tokens without act are rejected. */
+	require_delegation?: boolean;
+	/** Phase 3: JWT claim name that identifies the agent (default: "sub"). */
+	agent_claim?: string;
 }
 
 export interface ScenarioConfig {

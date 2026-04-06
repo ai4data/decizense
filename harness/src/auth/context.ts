@@ -222,6 +222,14 @@ export async function verifyAndBuildContext(
 		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
 	}
 
+	// Phase 3: enforce require_delegation if configured
+	if (authConfig.require_delegation && !result.act?.sub) {
+		throw new AuthError(
+			`Token for agent "${agentId}" is missing the act claim. require_delegation is enabled — ` +
+				'tokens must be obtained via RFC 8693 token exchange with a user identity.',
+		);
+	}
+
 	const ctx: AuthContext = {
 		agentId,
 		agentUri: `agent://${trustDomain}/${agentId}`,

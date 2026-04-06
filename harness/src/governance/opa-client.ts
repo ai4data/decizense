@@ -181,6 +181,14 @@ export async function evaluate(
 /**
  * Insert a decision log row. Best-effort — callers .catch() errors.
  */
+/** Back-fill the contract_id on an already-written decision log row (allow path). */
+export async function updateDecisionLogContract(decisionId: string, contractId: string): Promise<void> {
+	await executeQuery(`UPDATE decision_logs SET contract_id = $1 WHERE opa_decision_id = $2`, [
+		contractId,
+		decisionId,
+	]);
+}
+
 async function logDecision(
 	decisionId: string,
 	input: OpaInput,

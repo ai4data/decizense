@@ -1,0 +1,78 @@
+# Zitadel IdP for dazense delegation — Plan v3 Phase 3.
+#
+# Provides RFC 8693 Token Exchange with `act` claim for user→agent
+# delegation. Agents receive tokens with sub=agent_id, act={sub=user_id}.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.zitadel.yml up -d
+#
+# First-time setup:
+#   After the container starts, open http://localhost:8080 and:
+#   1. Create a project named "dazense"
+#   2. Create service users: ops-agent, booking-agent, customer-agent
+#   3. Create a human user: alice (test user for delegation)
+#   4. Enable Token Exchange in the project settings
+#   5. Configure the harness scenario.yml:
+#        auth:
+#          mode: jwt
+#          verify_strategy: jwks
+#          jwks_uri: http://localhost:8080/oauth/v2/keys
+#          issuer: http://localhost:8080
+#          audience: dazense-harness
+#          require_delegation: true
+#
+# Token exchange flow (programmatic):
+#   1. alice logs in → gets user_token
+#   2. POST /oauth/v2/token with grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+#      subject_token=user_token, requested_token_type=access_token,
+#      actor_token=agent_service_account_token
+#   3. Response: access_token with sub=agent_id, act={sub=alice}
+#   4. Agent uses this token to call the harness
+#
+# See docs/phase-3-zitadel-setup.md for detailed setup instructions.
+
+services:
+    zitadel:
+        container_name: dazense_zitadel
+        image: ghcr.io/zitadel/zitadel:latest
+        command: start-from-init --masterkeyFromEnv --tlsMode disabled
+        environment:
+            - ZITADEL_MASTERKEY=MasterkeyNeedsToBe32CharactersL
+            - ZITADEL_DATABASE_POSTGRES_HOST=zitadel-db
+            - ZITADEL_DATABASE_POSTGRES_PORT=5432
+            - ZITADEL_DATABASE_POSTGRES_DATABASE=zitadel
+            - ZITADEL_DATABASE_POSTGRES_USER_USERNAME=zitadel
+            - ZITADEL_DATABASE_POSTGRES_USER_PASSWORD=zitadel
+            - ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE=disable
+            - ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME=postgres
+            - ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD=postgres
+            - ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE=disable
+            - ZITADEL_EXTERNALSECURE=false
+            - ZITADEL_EXTERNALPORT=8080
+            - ZITADEL_EXTERNALDOMAIN=localhost
+            - ZITADEL_FIRSTINSTANCE_ORG_NAME=dazense
+        ports:
+            - '8080:8080'
+        depends_on:
+            zitadel-db:
+                condition: service_healthy
+        restart: unless-stopped
+
+    zitadel-db:
+        container_name: dazense_zitadel_db
+        image: postgres:16-alpine
+        environment:
+            - POSTGRES_USER=postgres
+            - POSTGRES_PASSWORD=postgres
+            - POSTGRES_DB=zitadel
+        volumes:
+            - zitadel-pg-data:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U postgres']
+            interval: 5s
+            timeout: 3s
+            retries: 10
+        restart: unless-stopped
+
+volumes:
+    zitadel-pg-data:

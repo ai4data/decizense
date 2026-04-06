@@ -9,6 +9,16 @@ import { z } from 'zod';
 import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getCatalogClient } from '../catalog/index.js';
+import { getCurrentAuthContext } from '../auth/context.js';
+
+/** Admin-only guard. Currently checks agentId === 'orchestrator'. Phase 3
+ *  follow-up: promote to a real role model once delegation is production-ready. */
+function assertAdminAgent(extra: unknown): void {
+	const ctx = getCurrentAuthContext(extra as { sessionId?: string } | undefined);
+	if (ctx.agentId !== 'orchestrator') {
+		throw new Error(`Admin tool access denied: agent "${ctx.agentId}" is not an admin agent`);
+	}
+}
 
 let loader: ScenarioLoader | null = null;
 
@@ -26,7 +36,8 @@ export function registerAdminTools(server: McpServer) {
 		{
 			check: z.enum(['pii', 'bundles', 'rules', 'all']).optional().default('all').describe('Which gaps to check'),
 		},
-		async ({ check }) => {
+		async ({ check }, extra) => {
+			assertAdminAgent(extra);
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
@@ -140,7 +151,8 @@ export function registerAdminTools(server: McpServer) {
 		{
 			table_name: z.string().describe('Table name to simulate removing'),
 		},
-		async ({ table_name }) => {
+		async ({ table_name }, extra) => {
+			assertAdminAgent(extra);
 			if (!loader) {
 				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
@@ -238,70 +250,76 @@ export function registerAdminTools(server: McpServer) {
 	/**
 	 * graph_stats — Overview statistics.
 	 */
-	server.tool('graph_stats', '[Admin] Get governance statistics — tables, rules, agents, decisions', {}, async () => {
-		if (!loader) {
-			return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
-		}
-
-		const allBundles = loader.getAllBundles();
-		const allRules = loader.businessRules;
-		const agents = Object.keys(loader.agents.agents);
-		const policy = loader.policy;
-
-		// Count decisions from database
-		let decisionCount = 0;
-		let findingCount = 0;
-		try {
-			const dResult = await executeQuery('SELECT COUNT(*) as count FROM decision_outcomes');
-			decisionCount = parseInt((dResult.rows[0] as { count: string }).count);
-			const fResult = await executeQuery('SELECT COUNT(*) as count FROM decision_findings');
-			findingCount = parseInt((fResult.rows[0] as { count: string }).count);
-		} catch {
-			// Tables may not exist
-		}
-
-		// Count tables from catalog
-		let catalogTableCount = 0;
-		let glossaryTermCount = 0;
-		const catalog = getCatalogClient();
-		if (catalog) {
-			try {
-				const tables = await catalog.listTables();
-				catalogTableCount = tables.length;
-				const terms = await catalog.listGlossaryTerms();
-				glossaryTermCount = terms.length;
-			} catch {
-				// Catalog unavailable
+	server.tool(
+		'graph_stats',
+		'[Admin] Get governance statistics — tables, rules, agents, decisions',
+		{},
+		async (_args, extra) => {
+			assertAdminAgent(extra);
+			if (!loader) {
+				return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Not initialized' }) }] };
 			}
-		}
 
-		return {
-			content: [
-				{
-					type: 'text' as const,
-					text: JSON.stringify(
-						{
-							catalog: { tables: catalogTableCount, glossary_terms: glossaryTermCount },
-							governance: {
-								bundles: allBundles.length,
-								business_rules: allRules.length,
-								pii_columns: [...loader.getPiiColumns()].length,
-								agents: agents.length,
+			const allBundles = loader.getAllBundles();
+			const allRules = loader.businessRules;
+			const agents = Object.keys(loader.agents.agents);
+			const policy = loader.policy;
+
+			// Count decisions from database
+			let decisionCount = 0;
+			let findingCount = 0;
+			try {
+				const dResult = await executeQuery('SELECT COUNT(*) as count FROM decision_outcomes');
+				decisionCount = parseInt((dResult.rows[0] as { count: string }).count);
+				const fResult = await executeQuery('SELECT COUNT(*) as count FROM decision_findings');
+				findingCount = parseInt((fResult.rows[0] as { count: string }).count);
+			} catch {
+				// Tables may not exist
+			}
+
+			// Count tables from catalog
+			let catalogTableCount = 0;
+			let glossaryTermCount = 0;
+			const catalog = getCatalogClient();
+			if (catalog) {
+				try {
+					const tables = await catalog.listTables();
+					catalogTableCount = tables.length;
+					const terms = await catalog.listGlossaryTerms();
+					glossaryTermCount = terms.length;
+				} catch {
+					// Catalog unavailable
+				}
+			}
+
+			return {
+				content: [
+					{
+						type: 'text' as const,
+						text: JSON.stringify(
+							{
+								catalog: { tables: catalogTableCount, glossary_terms: glossaryTermCount },
+								governance: {
+									bundles: allBundles.length,
+									business_rules: allRules.length,
+									pii_columns: [...loader.getPiiColumns()].length,
+									agents: agents.length,
+								},
+								decisions: { outcomes: decisionCount, findings: findingCount },
+								policy: {
+									max_rows: policy.defaults.max_rows,
+									pii_mode: policy.pii.mode,
+									risk_levels: Object.keys(policy.actions?.risk_classification ?? {}),
+								},
 							},
-							decisions: { outcomes: decisionCount, findings: findingCount },
-							policy: {
-								max_rows: policy.defaults.max_rows,
-								pii_mode: policy.pii.mode,
-								risk_levels: Object.keys(policy.actions?.risk_classification ?? {}),
-							},
-						},
-						null,
-						2,
-					),
-				},
-			],
-		};
-	});
+							null,
+							2,
+						),
+					},
+				],
+			};
+		},
+	);
 
 	/**
 	 * audit_decisions — Query past decisions for compliance.
@@ -316,7 +334,8 @@ export function registerAdminTools(server: McpServer) {
 			confidence: z.enum(['high', 'medium', 'low']).optional().describe('Filter by confidence'),
 			limit: z.number().optional().default(20).describe('Max results'),
 		},
-		async ({ from_date, to_date, agent_id, confidence, limit }) => {
+		async ({ from_date, to_date, agent_id, confidence, limit }, extra) => {
+			assertAdminAgent(extra);
 			try {
 				const conditions: string[] = [];
 				const params: unknown[] = [];
@@ -426,7 +445,8 @@ export function registerAdminTools(server: McpServer) {
 		{
 			opa_decision_id: z.string().describe('The decision log ID to replay'),
 		},
-		async ({ opa_decision_id }) => {
+		async ({ opa_decision_id }, extra) => {
+			assertAdminAgent(extra);
 			try {
 				const logResult = await executeQuery(
 					`SELECT opa_decision_id, bundle_revision, input, result, allowed, agent_id, tool_name, timestamp
@@ -511,7 +531,8 @@ export function registerAdminTools(server: McpServer) {
 			since: z.string().optional().describe('Only replay decisions after this timestamp (ISO format)'),
 			limit: z.number().optional().default(100).describe('Max decisions to replay'),
 		},
-		async ({ since, limit }) => {
+		async ({ since, limit }, extra) => {
+			assertAdminAgent(extra);
 			try {
 				const conditions: string[] = [];
 				const params: unknown[] = [];
