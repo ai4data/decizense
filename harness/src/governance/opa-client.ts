@@ -1,26 +1,25 @@
 /**
- * OPA HTTP client — Plan v3 Phase 2a.
+ * OPA HTTP client — Plan v3 Phase 2c.
  *
  * Minimal REST client for an OPA sidecar (docker-compose.opa.yml). The
  * harness calls this to evaluate governance decisions declaratively via
  * policy/dazense.rego + policy/data.json.
  *
- * Phase 2a: OPA runs in SHADOW mode. `evaluate()` is called alongside the
- * in-code governance pipeline and results are compared; mismatches are
- * logged. The in-code result is still returned to the caller.
- * Phase 2b:  OPA becomes authoritative and the in-code rules are deleted.
+ * Phase 2b made OPA authoritative. Phase 2c adds decision logging: every
+ * evaluate() call synchronously inserts a row into the decision_logs table
+ * with the full input, result, and bundle_revision. This enables the
+ * replay_outcome and policy_drift_report admin tools.
  *
  * Configuration:
  *   OPA_URL          default http://localhost:8181
- *   OPA_ENABLED      if "true" the harness startup performs a health check
- *                    and loads the bundle revision. If OPA is unreachable
- *                    in that mode, the harness fails fast.
  *   OPA_TIMEOUT_MS   per-request timeout (default 2000)
  */
 
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { executeQuery } from '../database/index.js';
 
 export interface OpaParsedSql {
 	tables: string[];
@@ -49,6 +48,8 @@ export interface OpaEvalResult {
 	allow: boolean;
 	violations: OpaViolation[];
 	bundle_revision: string | null;
+	/** Unique ID for this decision log entry (Phase 2c). */
+	opa_decision_id: string;
 }
 
 const OPA_URL = process.env.OPA_URL ?? 'http://localhost:8181';
@@ -99,17 +100,24 @@ export async function healthCheck(): Promise<{ ok: boolean; error?: string }> {
 
 /**
  * Evaluate a governance decision against the OPA policy bundle.
- * Returns { allow, violations[], bundle_revision }.
+ * Returns { allow, violations[], bundle_revision, opa_decision_id }.
  *
- * On ANY error (network, OPA error, shape mismatch) returns allow=false with
- * a synthetic violation. The caller (Phase 2a shadow hook) should treat
- * errors as "evaluation failed, log and move on" — the in-code result is
- * still authoritative in 2a. In 2b the harness should fail-closed.
+ * Phase 2c: after every evaluation, a row is synchronously inserted into
+ * decision_logs with the full input, result, and bundle revision. Logging
+ * failures are swallowed (best-effort) — they must never block governance.
+ *
+ * @param input  The OPA input document (agent_id, sql, parsed, etc.)
+ * @param sessionId  Optional MCP session ID for correlation.
+ * @param contractId  Optional contract ID assigned by the allow path.
  */
-export async function evaluate(input: OpaInput): Promise<OpaEvalResult> {
+export async function evaluate(input: OpaInput, sessionId?: string, contractId?: string): Promise<OpaEvalResult> {
 	const url = `${OPA_URL}/v1/data/dazense/governance/result`;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), OPA_TIMEOUT_MS);
+	const decisionId = `opa-${randomUUID()}`;
+	const bundleRevision = getBundleRevision();
+
+	let evalResult: OpaEvalResult;
 
 	try {
 		const resp = await fetch(url, {
@@ -120,35 +128,77 @@ export async function evaluate(input: OpaInput): Promise<OpaEvalResult> {
 		});
 
 		if (!resp.ok) {
-			return {
+			evalResult = {
 				allow: false,
 				violations: [{ check: 'opa_error', detail: `OPA HTTP ${resp.status}` }],
-				bundle_revision: getBundleRevision(),
+				bundle_revision: bundleRevision,
+				opa_decision_id: decisionId,
 			};
+		} else {
+			const body = (await resp.json()) as { result?: { allow?: boolean; violations?: OpaViolation[] } };
+			const result = body.result;
+			if (!result || typeof result.allow !== 'boolean') {
+				evalResult = {
+					allow: false,
+					violations: [{ check: 'opa_error', detail: 'OPA returned malformed result' }],
+					bundle_revision: bundleRevision,
+					opa_decision_id: decisionId,
+				};
+			} else {
+				evalResult = {
+					allow: result.allow,
+					violations: result.violations ?? [],
+					bundle_revision: bundleRevision,
+					opa_decision_id: decisionId,
+				};
+			}
 		}
-
-		const body = (await resp.json()) as { result?: { allow?: boolean; violations?: OpaViolation[] } };
-		const result = body.result;
-		if (!result || typeof result.allow !== 'boolean') {
-			return {
-				allow: false,
-				violations: [{ check: 'opa_error', detail: 'OPA returned malformed result' }],
-				bundle_revision: getBundleRevision(),
-			};
-		}
-
-		return {
-			allow: result.allow,
-			violations: result.violations ?? [],
-			bundle_revision: getBundleRevision(),
-		};
 	} catch (err) {
-		return {
+		evalResult = {
 			allow: false,
 			violations: [{ check: 'opa_error', detail: err instanceof Error ? err.message : String(err) }],
-			bundle_revision: getBundleRevision(),
+			bundle_revision: bundleRevision,
+			opa_decision_id: decisionId,
 		};
 	} finally {
 		clearTimeout(timer);
 	}
+
+	// Phase 2c: log the decision (best-effort, never blocks governance)
+	logDecision(decisionId, input, evalResult, sessionId, contractId).catch((err) => {
+		process.stderr.write(`[opa-client] decision log write failed (swallowed): ${err}\n`);
+	});
+
+	return evalResult;
+}
+
+/**
+ * Insert a decision log row. Best-effort — callers .catch() errors.
+ */
+async function logDecision(
+	decisionId: string,
+	input: OpaInput,
+	result: OpaEvalResult,
+	sessionId?: string,
+	contractId?: string,
+): Promise<void> {
+	const sqlHash = input.sql ? createHash('sha256').update(input.sql).digest('hex').slice(0, 64) : null;
+	await executeQuery(
+		`INSERT INTO decision_logs
+			(opa_decision_id, bundle_revision, agent_id, session_id, tool_name,
+			 sql_hash, input, result, allowed, contract_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		[
+			decisionId,
+			result.bundle_revision ?? 'unknown',
+			input.agent_id,
+			sessionId ?? null,
+			input.tool_name,
+			sqlHash,
+			JSON.stringify(input),
+			JSON.stringify({ allow: result.allow, violations: result.violations }),
+			result.allow,
+			contractId ?? null,
+		],
+	);
 }
