@@ -1,0 +1,1 @@
+OPA sample response: {"result":{"allow":false,"violations":[{"check":"bundle_scope","detail":"Table flights is not in bundle flights-ops"}]}}

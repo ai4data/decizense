@@ -1,0 +1,97 @@
+{
+	"agents": {
+		"booking": {
+			"bundle": "bookings",
+			"can_query": true,
+			"role": "domain"
+		},
+		"customer_service": {
+			"bundle": "customer-service",
+			"can_query": true,
+			"role": "domain"
+		},
+		"flight_ops": {
+			"bundle": "flights-ops",
+			"can_query": true,
+			"role": "domain"
+		},
+		"orchestrator": {
+			"bundle": null,
+			"can_query": false,
+			"role": "orchestrator"
+		}
+	},
+	"bundles": {
+		"bookings": {
+			"allowed_tables": [
+				"bookings",
+				"checkins",
+				"payments",
+				"public.bookings",
+				"public.checkins",
+				"public.payments",
+				"public.tickets",
+				"tickets"
+			],
+			"joins": [
+				{
+					"left_col": "booking_id",
+					"right_col": "booking_id"
+				},
+				{
+					"left_col": "booking_id",
+					"right_col": "booking_id"
+				},
+				{
+					"left_col": "ticket_id",
+					"right_col": "ticket_id"
+				}
+			]
+		},
+		"customer-service": {
+			"allowed_tables": ["customers", "public.customers"],
+			"joins": []
+		},
+		"flights-ops": {
+			"allowed_tables": [
+				"airlines",
+				"airports",
+				"flight_delays",
+				"flights",
+				"public.airlines",
+				"public.airports",
+				"public.flight_delays",
+				"public.flights"
+			],
+			"joins": [
+				{
+					"left_col": "origin",
+					"right_col": "airport_code"
+				},
+				{
+					"left_col": "destination",
+					"right_col": "airport_code"
+				},
+				{
+					"left_col": "airline_code",
+					"right_col": "airline_code"
+				},
+				{
+					"left_col": "flight_id",
+					"right_col": "flight_id"
+				}
+			]
+		}
+	},
+	"pii_columns": {
+		"customers": ["email", "first_name", "last_name", "phone"]
+	},
+	"policy": {
+		"allow_execute_sql": true,
+		"disallow_multi_statement": true,
+		"enforce_bundle_allowlist": true,
+		"enforce_limit": true,
+		"max_rows": 500,
+		"pii_mode": "block"
+	}
+}
