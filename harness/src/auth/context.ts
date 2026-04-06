@@ -213,13 +213,21 @@ export async function verifyAndBuildContext(
 	if (!result.valid) {
 		throw new AuthError(`Agent token verification failed: ${result.error}`);
 	}
-	if (!result.sub) {
-		throw new AuthError('Agent token missing sub claim — cannot determine agent identity');
+	// Phase 3: agent_claim config allows IdPs that put agent identity in a
+	// claim other than "sub" (e.g. "azp", "client_id"). Default: "sub".
+	const agentClaimName = authConfig.agent_claim ?? 'sub';
+	const agentClaimValue =
+		agentClaimName === 'sub' ? result.sub : (result.claims?.[agentClaimName] as string | undefined);
+
+	if (!agentClaimValue) {
+		throw new AuthError(`Agent token missing "${agentClaimName}" claim — cannot determine agent identity`);
 	}
 
-	const agentId = resolveAgentIdFromSubject(loader, result.sub);
+	const agentId = resolveAgentIdFromSubject(loader, agentClaimValue);
 	if (!agentId) {
-		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
+		throw new AuthError(
+			`Token ${agentClaimName}="${agentClaimValue}" does not match any agent identity.catalog_bot in agents.yml`,
+		);
 	}
 
 	// Phase 3: enforce require_delegation if configured
@@ -234,7 +242,7 @@ export async function verifyAndBuildContext(
 		agentId,
 		agentUri: `agent://${trustDomain}/${agentId}`,
 		authMethod: 'jwt',
-		tokenSubject: result.sub,
+		tokenSubject: result.sub ?? null,
 		tokenIssuer: result.iss ?? null,
 		tokenHash: tokenHash(token),
 		delegatedSubject: result.act?.sub ?? null,

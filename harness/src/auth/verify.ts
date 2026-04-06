@@ -21,6 +21,8 @@ export interface VerifyResult {
 	exp?: number;
 	/** RFC 8693 actor claim — present when a user delegates to an agent via token exchange. */
 	act?: { sub: string; iss?: string };
+	/** Raw decoded payload for reading non-standard claims (e.g. agent_claim). */
+	claims?: Record<string, unknown>;
 	error?: string;
 }
 
@@ -44,7 +46,8 @@ export class SharedSecretVerifier implements VerifyStrategy {
 				audience: expectedAudience,
 			}) as jwt.JwtPayload;
 
-			const act = (decoded as Record<string, unknown>).act as { sub: string; iss?: string } | undefined;
+			const raw = decoded as Record<string, unknown>;
+			const act = raw.act as { sub: string; iss?: string } | undefined;
 			return {
 				valid: true,
 				sub: decoded.sub,
@@ -52,6 +55,7 @@ export class SharedSecretVerifier implements VerifyStrategy {
 				aud: typeof decoded.aud === 'string' ? decoded.aud : decoded.aud?.[0],
 				exp: decoded.exp,
 				act: act?.sub ? act : undefined,
+				claims: raw,
 			};
 		} catch (err) {
 			return { valid: false, error: (err as Error).message };
@@ -92,7 +96,8 @@ export class JwksVerifier implements VerifyStrategy {
 					return;
 				}
 				const payload = decoded as jwt.JwtPayload;
-				const act = (payload as Record<string, unknown>).act as { sub: string; iss?: string } | undefined;
+				const raw = payload as Record<string, unknown>;
+				const act = raw.act as { sub: string; iss?: string } | undefined;
 				resolve({
 					valid: true,
 					sub: payload.sub,
@@ -100,6 +105,7 @@ export class JwksVerifier implements VerifyStrategy {
 					aud: typeof payload.aud === 'string' ? payload.aud : payload.aud?.[0],
 					exp: payload.exp,
 					act: act?.sub ? act : undefined,
+					claims: raw,
 				});
 			});
 		});

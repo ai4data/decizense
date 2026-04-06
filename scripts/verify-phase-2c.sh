@@ -141,7 +141,11 @@ fi
 NULL_SESSION=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
     "SELECT COUNT(*) FROM decision_logs WHERE session_id IS NULL")
 echo "decision_logs rows with null session_id: ${NULL_SESSION} (of ${LOG_COUNT})"
-echo "  ✓ decision log completeness (${LOG_COUNT} rows)"
+if [ "${NULL_SESSION}" -gt 0 ]; then
+    echo "FAIL: ${NULL_SESSION} decision_log rows have null session_id — session correlation broken"
+    exit 1
+fi
+echo "  ✓ decision log completeness (${LOG_COUNT} rows, 0 null session_id)"
 
 # Dump a sample for evidence
 docker exec -i travel_postgres psql -U travel_admin -d travel_db -c \
