@@ -39,6 +39,11 @@ export interface AuthContext {
 	tokenIssuer: string | null;
 	tokenHash: string | null;
 
+	// RFC 8693 delegation (Phase 3) — who authorized this agent to act?
+	// Present when a user token is exchanged for an agent token with `act` claim.
+	delegatedSubject: string | null;
+	delegationIssuer: string | null;
+
 	// Session correlation
 	sessionId: string | null;
 	authenticatedAt: Date;
@@ -217,16 +222,24 @@ export async function verifyAndBuildContext(
 		throw new AuthError(`Token sub "${result.sub}" does not match any agent identity.catalog_bot in agents.yml`);
 	}
 
-	return {
+	const ctx: AuthContext = {
 		agentId,
 		agentUri: `agent://${trustDomain}/${agentId}`,
 		authMethod: 'jwt',
 		tokenSubject: result.sub,
 		tokenIssuer: result.iss ?? null,
 		tokenHash: tokenHash(token),
+		delegatedSubject: result.act?.sub ?? null,
+		delegationIssuer: result.act?.iss ?? null,
 		sessionId: null,
 		authenticatedAt: new Date(),
 	};
+
+	if (ctx.delegatedSubject) {
+		process.stderr.write(`[auth] delegation: agent=${agentId} acting on behalf of user=${ctx.delegatedSubject}\n`);
+	}
+
+	return ctx;
 }
 
 /**
@@ -246,6 +259,8 @@ export function buildConfigOnlyContext(loader: ScenarioLoader, agentId: string, 
 		tokenSubject: null,
 		tokenIssuer: null,
 		tokenHash: null,
+		delegatedSubject: null,
+		delegationIssuer: null,
 		sessionId: null,
 		authenticatedAt: new Date(),
 	};
@@ -262,6 +277,8 @@ function resolveConfigOnlyContext(loader: ScenarioLoader, trustDomain: string): 
 			tokenSubject: null,
 			tokenIssuer: null,
 			tokenHash: null,
+			delegatedSubject: null,
+			delegationIssuer: null,
 			sessionId: null,
 			authenticatedAt: new Date(),
 		};

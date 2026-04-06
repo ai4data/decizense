@@ -262,8 +262,10 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 				},
 	};
 
-	// ── Evaluate via OPA (authoritative) ──
-	const opaResult = await opaEvaluate(opaInput);
+	// ── Evaluate via OPA (authoritative + Phase 2c decision logging) ──
+	// Phase 3: pass delegatedSubject so the decision log captures who authorized
+	const delegatedSubject = params.authContext?.delegatedSubject ?? null;
+	const opaResult = await opaEvaluate(opaInput, undefined, undefined, delegatedSubject);
 	const policyVersion = opaResult.bundle_revision;
 
 	// ── Map OPA result to GovernanceResult ──

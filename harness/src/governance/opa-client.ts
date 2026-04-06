@@ -109,8 +109,14 @@ export async function healthCheck(): Promise<{ ok: boolean; error?: string }> {
  * @param input  The OPA input document (agent_id, sql, parsed, etc.)
  * @param sessionId  Optional MCP session ID for correlation.
  * @param contractId  Optional contract ID assigned by the allow path.
+ * @param delegatedSubject  Optional delegated user subject (Phase 3 act claim).
  */
-export async function evaluate(input: OpaInput, sessionId?: string, contractId?: string): Promise<OpaEvalResult> {
+export async function evaluate(
+	input: OpaInput,
+	sessionId?: string,
+	contractId?: string,
+	delegatedSubject?: string | null,
+): Promise<OpaEvalResult> {
 	const url = `${OPA_URL}/v1/data/dazense/governance/result`;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), OPA_TIMEOUT_MS);
@@ -165,7 +171,7 @@ export async function evaluate(input: OpaInput, sessionId?: string, contractId?:
 	}
 
 	// Phase 2c: log the decision (best-effort, never blocks governance)
-	logDecision(decisionId, input, evalResult, sessionId, contractId).catch((err) => {
+	logDecision(decisionId, input, evalResult, sessionId, contractId, delegatedSubject).catch((err) => {
 		process.stderr.write(`[opa-client] decision log write failed (swallowed): ${err}\n`);
 	});
 
@@ -181,13 +187,14 @@ async function logDecision(
 	result: OpaEvalResult,
 	sessionId?: string,
 	contractId?: string,
+	delegatedSubject?: string | null,
 ): Promise<void> {
 	const sqlHash = input.sql ? createHash('sha256').update(input.sql).digest('hex').slice(0, 64) : null;
 	await executeQuery(
 		`INSERT INTO decision_logs
 			(opa_decision_id, bundle_revision, agent_id, session_id, tool_name,
-			 sql_hash, input, result, allowed, contract_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			 sql_hash, input, result, allowed, contract_id, delegated_subject)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		[
 			decisionId,
 			result.bundle_revision ?? 'unknown',
@@ -199,6 +206,7 @@ async function logDecision(
 			JSON.stringify({ allow: result.allow, violations: result.violations }),
 			result.allow,
 			contractId ?? null,
+			delegatedSubject ?? null,
 		],
 	);
 }

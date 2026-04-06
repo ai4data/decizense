@@ -90,8 +90,8 @@ export function registerPersistTools(server: McpServer) {
 					data_sources,
 				);
 				const result = await executeQuery(
-					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources, auth_method, token_hash, correlation_id, idempotency_key)
-					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+					`INSERT INTO decision_findings (session_id, agent_id, finding, confidence, data_sources, auth_method, token_hash, correlation_id, idempotency_key, delegated_subject)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 					 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 					 RETURNING finding_id, created_at`,
 					[
@@ -104,6 +104,7 @@ export function registerPersistTools(server: McpServer) {
 						ctx.tokenHash,
 						ctx.sessionId,
 						idempotencyKey,
+						ctx.delegatedSubject,
 					],
 				);
 				let row: { finding_id: number; created_at: string };
@@ -267,8 +268,8 @@ export function registerPersistTools(server: McpServer) {
 
 				const result = await executeQuery(
 					`INSERT INTO decision_proposals (session_id, agent_id, proposed_action, confidence, risk_class,
-					   evidence_event_ids, evidence_signal_types, evidence_rules, auth_method, token_hash, correlation_id)
-					 VALUES ($1, $2, $3, $4, $5, $6::integer[], $7::text[], $8::text[], $9, $10, $11)
+					   evidence_event_ids, evidence_signal_types, evidence_rules, auth_method, token_hash, correlation_id, delegated_subject)
+					 VALUES ($1, $2, $3, $4, $5, $6::integer[], $7::text[], $8::text[], $9, $10, $11, $12)
 					 RETURNING proposal_id, status, created_at`,
 					[
 						session_id,
@@ -282,6 +283,7 @@ export function registerPersistTools(server: McpServer) {
 						ctx.authMethod,
 						ctx.tokenHash,
 						ctx.sessionId,
+						ctx.delegatedSubject,
 					],
 				);
 				const row = result.rows[0] as { proposal_id: number; status: string; created_at: string };
@@ -582,8 +584,8 @@ export function registerPersistTools(server: McpServer) {
 				const result = await executeQuery(
 					`INSERT INTO decision_outcomes (session_id, question, decision_summary, reasoning, confidence,
 					   agents_involved, cost_usd, evidence_event_ids, evidence_rules, evidence_signal_types, evidence_proposal_ids,
-					   auth_method, token_hash, correlation_id, idempotency_key)
-					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[], $12, $13, $14, $15)
+					   auth_method, token_hash, correlation_id, idempotency_key, delegated_subject)
+					 VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::integer[], $9::text[], $10::text[], $11::integer[], $12, $13, $14, $15, $16)
 					 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 					 RETURNING outcome_id, created_at`,
 					[
@@ -602,6 +604,7 @@ export function registerPersistTools(server: McpServer) {
 						ctx.tokenHash,
 						ctx.sessionId,
 						idempotencyKey,
+						ctx.delegatedSubject,
 					],
 				);
 				let row: { outcome_id: number; created_at: string };

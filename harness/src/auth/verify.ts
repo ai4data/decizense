@@ -19,6 +19,8 @@ export interface VerifyResult {
 	iss?: string;
 	aud?: string;
 	exp?: number;
+	/** RFC 8693 actor claim — present when a user delegates to an agent via token exchange. */
+	act?: { sub: string; iss?: string };
 	error?: string;
 }
 
@@ -42,12 +44,14 @@ export class SharedSecretVerifier implements VerifyStrategy {
 				audience: expectedAudience,
 			}) as jwt.JwtPayload;
 
+			const act = (decoded as Record<string, unknown>).act as { sub: string; iss?: string } | undefined;
 			return {
 				valid: true,
 				sub: decoded.sub,
 				iss: decoded.iss,
 				aud: typeof decoded.aud === 'string' ? decoded.aud : decoded.aud?.[0],
 				exp: decoded.exp,
+				act: act?.sub ? act : undefined,
 			};
 		} catch (err) {
 			return { valid: false, error: (err as Error).message };
@@ -88,12 +92,14 @@ export class JwksVerifier implements VerifyStrategy {
 					return;
 				}
 				const payload = decoded as jwt.JwtPayload;
+				const act = (payload as Record<string, unknown>).act as { sub: string; iss?: string } | undefined;
 				resolve({
 					valid: true,
 					sub: payload.sub,
 					iss: payload.iss,
 					aud: typeof payload.aud === 'string' ? payload.aud : payload.aud?.[0],
 					exp: payload.exp,
+					act: act?.sub ? act : undefined,
 				});
 			});
 		});
