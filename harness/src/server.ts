@@ -79,20 +79,19 @@ async function initializeSharedState(): Promise<ScenarioLoader> {
 
 	initGovernance(scenarioPath);
 
-	// Plan v3 Phase 2a: if OPA is enabled, verify the sidecar is reachable at
-	// startup and log the bundle revision. Shadow mode (OPA_SHADOW=true) and
-	// cutover mode (Phase 2b) both depend on this, so we fail fast here rather
-	// than silently dropping shadow comparisons later.
-	if (process.env.OPA_ENABLED === 'true') {
+	// Plan v3 Phase 2b: OPA is now authoritative. The sidecar MUST be reachable
+	// at startup — fail fast if not. OPA_ENABLED=true is the only supported mode.
+	{
 		const opaHealth = await opaHealthCheck();
 		const revision = opaBundleRevision();
 		if (!opaHealth.ok) {
 			console.error(`[harness] OPA health check FAILED: ${opaHealth.error}`);
-			throw new Error(`OPA_ENABLED=true but sidecar is unreachable: ${opaHealth.error}`);
+			throw new Error(
+				`OPA sidecar is unreachable: ${opaHealth.error}. Start it with: docker compose -f docker/docker-compose.opa.yml up -d`,
+			);
 		}
 		console.error(
-			`[harness] OPA: reachable, bundle revision ${revision ? revision.slice(0, 12) : '(missing .manifest)'}` +
-				(process.env.OPA_SHADOW === 'true' ? ' [SHADOW MODE]' : ''),
+			`[harness] OPA: reachable, bundle revision ${revision ? revision.slice(0, 12) : '(missing .manifest)'}`,
 		);
 	}
 

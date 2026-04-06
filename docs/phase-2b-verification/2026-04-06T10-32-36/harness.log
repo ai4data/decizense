@@ -1,0 +1,49 @@
+[tracing] OpenTelemetry initialized → http://localhost:4318/v1/traces
+[harness] Loading scenario from: ../scenario/travel
+[harness] Scenario: SkyJet Travel Operations (travel)
+[harness] Database: postgresql://localhost:5433/travel_db
+[catalog] Provider: openmetadata
+[harness] Catalog: connected (http://localhost:8585)
+[harness] OPA: reachable, bundle revision 6f2d6259a36f
+[harness] Agents: orchestrator, flight_ops, booking, customer_service
+[harness] Policy: 4 PII columns blocked, max 500 rows
+[harness] WARNING: config-only auth in HTTP mode is insecure — localhost only, dev only.
+Initializing DBOS (v4.13.5)
+System Database URL: postgres://travel_admin:***@localhost:5433/travel_db
+Executor ID: local
+Application version: dazense-dev
+No workflows to recover from application version dazense-dev
+DBOS launched!
+Current version 'dazense-dev' is not the latest version. Latest version is 'dazense-agent-dev'.
+[dbos] initialized (schema=dbos, app_version=dazense-dev) — pending workflows recovered
+[harness] HTTP transport listening on http://127.0.0.1:9080/mcp
+[harness] session open: ab53d93b… agent=flight_ops method=config-only
+[harness] session open: e132e5f9… agent=flight_ops method=config-only
+[harness] session open: 4030c988… agent=flight_ops method=config-only
+[harness] session open: 0698e3f3… agent=flight_ops method=config-only
+[harness] session open: f617ce95… agent=flight_ops method=config-only
+[harness] session open: aba06bbd… agent=flight_ops method=config-only
+[harness] session open: 86ebab6a… agent=flight_ops method=config-only
+[harness] session open: b2ed31a5… agent=booking method=config-only
+[harness] session open: df60e0df… agent=booking method=config-only
+[harness] session open: f047505d… agent=booking method=config-only
+[harness] session open: fea6a068… agent=customer_service method=config-only
+[harness] session open: e10ae22e… agent=flight_ops method=config-only
+[harness] session open: ad72621f… agent=booking method=config-only
+[harness] session open: 37ac57d3… agent=customer_service method=config-only
+[harness] session open: 88453286… agent=customer_service method=config-only
+[harness] session open: 9ea1dbce… agent=customer_service method=config-only
+[harness] session open: 597bb947… agent=customer_service method=config-only
+[harness] session open: 048a5e99… agent=customer_service method=config-only
+[harness] session open: d013271d… agent=flight_ops method=config-only
+[harness] session open: 31bb625c… agent=booking method=config-only
+[harness] session open: 4b47ff67… agent=flight_ops method=config-only
+[harness] session open: d8dc5422… agent=flight_ops method=config-only
+[harness] session open: dd31dc4e… agent=flight_ops method=config-only
+[harness] session open: 013f7f3a… agent=booking method=config-only
+[harness] session open: 15730011… agent=flight_ops method=config-only
+[harness] session open: 65829d27… agent=booking method=config-only
+[harness] session open: c44c447b… agent=flight_ops method=config-only
+[harness] session open: d6db92a8… agent=orchestrator method=config-only
+[harness] session open: a7247d98… agent=customer_service method=config-only
+[harness] session open: f6d19aa9… agent=booking method=config-only

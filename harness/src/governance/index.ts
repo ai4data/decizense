@@ -1,26 +1,24 @@
 /**
- * INTERNAL GOVERNANCE — The harness calls these, agents never see them.
+ * INTERNAL GOVERNANCE — Phase 2b: OPA-authoritative.
  *
  * When an agent calls query_data or query_metrics, the harness internally
  * runs these checks before executing. If any check fails, the agent gets
  * a block response — it never knows the internal mechanics.
  *
- * Full governance pipeline (runs on every query):
- *
- *   1. authenticate_agent    → is this agent who it claims to be?
- *   2. check_bundle_scope    → are all tables within the agent's bundle?
- *   3. check_pii             → are any PII columns in the query?
- *   4. validate_sql          → is the SQL safe? (read-only, single statement, has LIMIT)
- *   5. check_joins           → are all joins on the approved allowlist?
- *   6. check_row_limit       → is LIMIT present and within max_rows?
- *   7. match_business_rules  → which rules apply? (advisory, included in response)
- *   8. build_contract        → create audit record of what was approved
+ * Phase 2b changes:
+ *   - The 8 in-code rule checks are DELETED. OPA is now authoritative.
+ *   - evaluateGovernance: parseSql → build OpaInput → opaClient.evaluate()
+ *     → shape GovernanceResult with the existing checks[] contract.
+ *   - AuthContext defense-in-depth stays in TS (pre-OPA).
+ *   - parseSql stays in TS (Rego receives the parsed output).
+ *   - filterPiiFromResults / filterPiiFromFinding stay in TS
+ *     (defense-in-depth on the response, not the gate).
  */
 
 import { ScenarioLoader, type PolicyConfig, type BundleConfig } from '../config/index.js';
 import { getCatalogClient, type ICatalogClient } from '../catalog/index.js';
 import { getAuthContext, type AuthContext } from '../auth/context.js';
-import { shadowCompare, type ShadowParsedSql } from './shadow.js';
+import { evaluate as opaEvaluate, getBundleRevision, type OpaInput, type OpaParsedSql } from './opa-client.js';
 
 // ─── Types ───
 
@@ -39,6 +37,8 @@ export interface GovernanceResult {
 	applicable_rules?: string[];
 	contract_id?: string;
 	checks?: GovernanceCheck[];
+	/** Bundle revision (sha256) of the OPA policy that evaluated this decision. */
+	policy_version?: string | null;
 }
 
 export interface AgentIdentity {
@@ -50,7 +50,7 @@ export interface AgentIdentity {
 	authenticated: boolean;
 }
 
-// ─── SQL Parsing (lightweight) ───
+// ─── SQL Parsing (lightweight, stays in TS) ───
 
 interface ParsedSql {
 	tables: string[];
@@ -59,25 +59,20 @@ interface ParsedSql {
 	limitValue: number | null;
 	isReadOnly: boolean;
 	statementCount: number;
-	// Parsed JOIN conditions, column names only (table prefixes stripped).
-	// Added in Phase 2a so the shadow evaluator can feed them to OPA.
 	joins: Array<{ leftCol: string; rightCol: string }>;
 }
 
 function parseSql(sql: string): ParsedSql {
 	const upper = sql.toUpperCase().trim();
 
-	// Statement count (split by semicolons, filter empty)
 	const statements = sql
 		.split(';')
 		.map((s) => s.trim())
 		.filter((s) => s.length > 0);
 
-	// Read-only check
 	const writeKeywords = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'GRANT', 'REVOKE'];
 	const isReadOnly = !writeKeywords.some((kw) => upper.includes(kw));
 
-	// Extract tables from FROM and JOIN clauses
 	const tablePattern = /(?:FROM|JOIN)\s+([a-z_][a-z0-9_.]*)/gi;
 	const tables: string[] = [];
 	let match;
@@ -85,7 +80,6 @@ function parseSql(sql: string): ParsedSql {
 		tables.push(match[1].toLowerCase());
 	}
 
-	// Extract columns from SELECT
 	const selectMatch = sql.match(/SELECT\s+([\s\S]*?)(?:\bFROM\b)/i);
 	const columns: string[] = [];
 	if (selectMatch) {
@@ -93,7 +87,6 @@ function parseSql(sql: string): ParsedSql {
 		if (selectClause.trim() !== '*') {
 			const parts = selectClause.split(',').map((p) => p.trim());
 			for (const part of parts) {
-				// Get the column name (last identifier, ignoring aliases)
 				const col = part
 					.split(/\s+(?:AS\s+)?/i)
 					.pop()
@@ -103,14 +96,10 @@ function parseSql(sql: string): ParsedSql {
 		}
 	}
 
-	// LIMIT check
 	const limitMatch = sql.match(/LIMIT\s+(\d+)/i);
 	const hasLimit = limitMatch !== null;
 	const limitValue = limitMatch ? parseInt(limitMatch[1], 10) : null;
 
-	// JOIN parsing — mirror the regex used in the in-code bundle-scope check
-	// (line ~320) but emit structured output. Column names are lowercased and
-	// table/alias prefixes stripped to match the existing allow-list format.
 	const joinPattern = /JOIN\s+\S+\s+\S*\s*ON\s+(\S+)\s*=\s*(\S+)/gi;
 	const joins: Array<{ leftCol: string; rightCol: string }> = [];
 	let jMatch: RegExpExecArray | null;
@@ -149,7 +138,6 @@ export function initGovernance(scenarioPath: string) {
 export function authenticateAgent(agentId: string): AgentIdentity {
 	if (!loader) throw new Error('Governance not initialized');
 
-	// Cross-check against AuthContext (connection-bound identity)
 	try {
 		const ctx = getAuthContext();
 		if (ctx.agentId && ctx.agentId !== agentId) {
@@ -190,19 +178,6 @@ export function authenticateAgent(agentId: string): AgentIdentity {
 	};
 }
 
-/**
- * Run the full governance pipeline on a query.
- *
- * Identity is resolved from the AuthContext passed in by the caller (the tool
- * handler), which got it from `getCurrentAuthContext(extra)`. This keeps the
- * governance engine free of global state and works identically in stdio mode
- * (singleton context) and HTTP mode (per-session context map).
- *
- * For backward compatibility, callers may pass `agent_id` directly instead of
- * `authContext`; in that case we fall back to the singleton for resolution.
- * Mismatches between `agent_id` and `authContext.agentId` trigger an identity
- * mismatch error (defense in depth).
- */
 export interface EvaluateGovernanceParams {
 	authContext?: AuthContext;
 	agent_id?: string;
@@ -213,52 +188,19 @@ export interface EvaluateGovernanceParams {
 }
 
 /**
- * Phase 2a wrapper: calls the internal in-code pipeline, then (if
- * OPA_SHADOW=true) fires a fire-and-forget comparison against the OPA
- * sidecar. The in-code result is always returned — shadow mode does not
- * affect the request path. Phase 2b will replace the internal call with a
- * direct opa-client.evaluate().
+ * Run the full governance pipeline on a query — OPA-authoritative (Phase 2b).
+ *
+ * 1. Resolve agentId from AuthContext (defense-in-depth, stays in TS)
+ * 2. parseSql (stays in TS — Rego receives the parsed output)
+ * 3. Build OpaInput and POST to OPA sidecar
+ * 4. Map OPA violations to the existing GovernanceCheck[] / GovernanceResult
+ *    contract so call-sites (action.ts) are unchanged
+ * 5. On allow: collect PII columns for defense-in-depth result filtering
  */
 export async function evaluateGovernance(params: EvaluateGovernanceParams): Promise<GovernanceResult> {
-	const result = await evaluateGovernanceInternal(params);
-
-	if (process.env.OPA_SHADOW === 'true') {
-		const agentId =
-			params.authContext?.agentId ??
-			params.agent_id ??
-			(() => {
-				try {
-					return getAuthContext().agentId;
-				} catch {
-					return '';
-				}
-			})();
-		const parsedForShadow: ShadowParsedSql | null = params.sql ? parseSql(params.sql) : null;
-		// Fire-and-forget: await a no-throw promise so Node doesn't warn about
-		// unhandled rejections, but we don't delay the caller.
-		void shadowCompare(
-			{
-				agentId,
-				toolName: params.sql ? 'query_data' : 'query_metrics',
-				sql: params.sql ?? null,
-				metricRefs: params.metric_refs ?? [],
-				parsed: parsedForShadow,
-			},
-			result,
-		);
-	}
-
-	return result;
-}
-
-async function evaluateGovernanceInternal(params: EvaluateGovernanceParams): Promise<GovernanceResult> {
 	if (!loader) throw new Error('Governance not initialized');
 
-	const checks: GovernanceCheck[] = [];
-	const warnings: string[] = [];
-	const blockedColumns: string[] = [];
-
-	// ── Resolve agent_id ──
+	// ── Resolve agent_id (AuthContext defense-in-depth) ──
 	let agentId: string;
 	if (params.authContext) {
 		agentId = params.authContext.agentId;
@@ -270,7 +212,6 @@ async function evaluateGovernanceInternal(params: EvaluateGovernanceParams): Pro
 			};
 		}
 	} else {
-		// Legacy path: no explicit AuthContext, fall back to singleton
 		try {
 			agentId = getAuthContext().agentId;
 			if (params.agent_id && params.agent_id !== agentId) {
@@ -292,218 +233,92 @@ async function evaluateGovernanceInternal(params: EvaluateGovernanceParams): Pro
 		}
 	}
 
-	// ── 1. Authenticate agent ──
-	const identity = authenticateAgent(agentId);
-	checks.push({
-		name: 'authenticate',
-		passed: identity.authenticated,
-		detail: identity.authenticated ? `Agent ${agentId} authenticated` : 'Unknown agent',
-	});
-	if (!identity.authenticated) {
-		return { allowed: false, reason: `Unknown agent: ${agentId}`, checks };
-	}
+	// ── Parse SQL and build OPA input ──
+	const parsed: ParsedSql | null = params.sql ? parseSql(params.sql) : null;
 
-	// ── 2. Check agent can query ──
-	if (!identity.can_query) {
-		checks.push({ name: 'can_query', passed: false, detail: 'Agent role does not permit queries' });
-		return { allowed: false, reason: `Agent ${agentId} (${identity.role}) cannot execute queries`, checks };
-	}
-	checks.push({ name: 'can_query', passed: true });
-
-	const policy = loader.policy;
-
-	// If SQL is provided, parse it
-	let parsed: ParsedSql | null = null;
-	if (params.sql) {
-		parsed = parseSql(params.sql);
-
-		// ── 3. Read-only check ──
-		checks.push({
-			name: 'read_only',
-			passed: parsed.isReadOnly,
-			detail: parsed.isReadOnly ? 'Query is read-only' : 'Write operations detected',
-		});
-		if (!parsed.isReadOnly) {
-			return { allowed: false, reason: 'Write operations (INSERT/UPDATE/DELETE/DROP) are not allowed', checks };
-		}
-
-		// ── 4. Single statement check ──
-		const singleStmt = parsed.statementCount <= 1;
-		checks.push({
-			name: 'single_statement',
-			passed: singleStmt,
-			detail: `${parsed.statementCount} statement(s)`,
-		});
-		if (!singleStmt && policy.execution.sql_validation.disallow_multi_statement) {
-			return { allowed: false, reason: 'Multi-statement queries are not allowed', checks };
-		}
-
-		// ── 5. Bundle scope check ──
-		if (identity.bundle) {
-			try {
-				const bundle = loader.getBundle(identity.bundle);
-				const allowedTables = new Set(bundle.tables.map((t) => `${t.schema}.${t.table}`));
-				// Also allow just table name without schema
-				bundle.tables.forEach((t) => allowedTables.add(t.table));
-
-				const outOfScope = parsed.tables.filter(
-					(t) => !allowedTables.has(t) && !allowedTables.has(t.replace(/^public\./, '')),
-				);
-
-				const scopePassed = outOfScope.length === 0;
-				checks.push({
-					name: 'bundle_scope',
-					passed: scopePassed,
-					detail: scopePassed
-						? `All tables within bundle ${identity.bundle}`
-						: `Tables out of scope: ${outOfScope.join(', ')}`,
-				});
-				if (!scopePassed) {
-					return {
-						allowed: false,
-						reason: `Tables [${outOfScope.join(', ')}] are not in your bundle (${identity.bundle}). You can only query: ${[...allowedTables].join(', ')}`,
-						checks,
-					};
+	const opaInput: OpaInput = {
+		agent_id: agentId,
+		tool_name: params.sql ? 'query_data' : 'query_metrics',
+		sql: params.sql ?? '',
+		metric_refs: params.metric_refs ?? [],
+		parsed: parsed
+			? {
+					tables: parsed.tables,
+					columns: parsed.columns,
+					has_limit: parsed.hasLimit,
+					limit_value: parsed.limitValue,
+					is_read_only: parsed.isReadOnly,
+					statement_count: parsed.statementCount,
+					joins: parsed.joins.map((j) => ({ left_col: j.leftCol, right_col: j.rightCol })),
 				}
-			} catch {
-				checks.push({ name: 'bundle_scope', passed: false, detail: `Bundle ${identity.bundle} not found` });
-				return { allowed: false, reason: `Bundle ${identity.bundle} not found`, checks };
-			}
-		}
+			: {
+					tables: [],
+					columns: [],
+					has_limit: false,
+					limit_value: null,
+					is_read_only: true,
+					statement_count: 0,
+					joins: [],
+				},
+	};
 
-		// ── 5b. Join allowlist check ──
-		if (identity.bundle && parsed) {
-			try {
-				const bundle = loader.getBundle(identity.bundle);
-				const joinPattern = /JOIN\s+\S+\s+\S*\s*ON\s+(\S+)\s*=\s*(\S+)/gi;
-				let joinMatch;
-				while ((joinMatch = joinPattern.exec(params.sql)) !== null) {
-					const leftCol = joinMatch[1].toLowerCase().replace(/\w+\./, '');
-					const rightCol = joinMatch[2].toLowerCase().replace(/\w+\./, '');
-					const allowedJoins = (bundle.joins ?? []).map(
-						(j) => `${j.left.column.toLowerCase()}=${j.right.column.toLowerCase()}`,
-					);
-					const joinKey = `${leftCol}=${rightCol}`;
-					const reverseKey = `${rightCol}=${leftCol}`;
-					if (!allowedJoins.includes(joinKey) && !allowedJoins.includes(reverseKey)) {
-						checks.push({
-							name: 'join_allowlist',
-							passed: false,
-							detail: `Join ${joinMatch[1]} = ${joinMatch[2]} not in bundle allowlist`,
-						});
-					}
-				}
-			} catch {
-				/* bundle not found — already caught above */
-			}
+	// ── Evaluate via OPA (authoritative) ──
+	const opaResult = await opaEvaluate(opaInput);
+	const policyVersion = opaResult.bundle_revision;
 
-			const failedJoins = checks.filter((c) => c.name === 'join_allowlist' && !c.passed);
-			if (failedJoins.length > 0) {
-				return {
-					allowed: false,
-					reason: `Join not in bundle allowlist: ${failedJoins.map((j) => j.detail).join('; ')}`,
-					checks,
-				};
-			}
-		}
+	// ── Map OPA result to GovernanceResult ──
+	if (!opaResult.allow) {
+		// OPA returns all violations simultaneously (not early-return). Sort
+		// them by the original pipeline's check order so the "reason" text is
+		// deterministic and matches the old behavior where the first failing
+		// check's message was returned.
+		const CHECK_PRIORITY: Record<string, number> = {
+			authenticate: 0,
+			can_query: 1,
+			read_only: 2,
+			single_statement: 3,
+			bundle_scope: 4,
+			join_allowlist: 5,
+			execution_permission: 6,
+			pii_check: 7,
+			limit_check: 8,
+			limit_value: 9,
+			opa_error: 99,
+		};
+		const sorted = [...opaResult.violations].sort(
+			(a, b) => (CHECK_PRIORITY[a.check] ?? 50) - (CHECK_PRIORITY[b.check] ?? 50),
+		);
 
-		// ── 5c. Execution permission check ──
-		if (!policy.execution.allow_execute_sql) {
-			checks.push({ name: 'execution_permission', passed: false, detail: 'SQL execution disabled by policy' });
-			return {
-				allowed: false,
-				reason: 'SQL execution is disabled by policy (execution.allow_execute_sql = false)',
-				checks,
-			};
-		}
+		const checks: GovernanceCheck[] = sorted.map((v) => ({
+			name: v.check,
+			passed: false,
+			detail: v.detail,
+		}));
 
-		// ── 6. PII column check (catalog-first, fallback to YAML) ──
-		let piiColumns: Set<string>;
-		const catalog = getCatalogClient();
-		if (catalog) {
-			try {
-				piiColumns = await catalog.getPiiColumns();
-			} catch {
-				piiColumns = loader.getPiiColumns();
-			}
-		} else {
-			piiColumns = loader.getPiiColumns();
-		}
-		const sqlLower = params.sql.toLowerCase();
+		// Build a human-readable reason from the highest-priority violation
+		const firstViolation = sorted[0];
+		const reason = firstViolation?.detail ?? 'Blocked by policy';
 
-		// Check if SELECT * is used on a table with PII columns
-		const usesSelectStar = /select\s+\*/.test(sqlLower);
-		const queriedTables = new Set<string>();
-		const tablePattern = /(?:from|join)\s+([a-z_][a-z0-9_.]*)/gi;
-		let tableMatch;
-		while ((tableMatch = tablePattern.exec(params.sql)) !== null) {
-			queriedTables.add(tableMatch[1].toLowerCase().replace(/^public\./, ''));
-		}
+		// Extract blocked PII columns if any pii_check violations
+		const blockedColumns = opaResult.violations
+			.filter((v) => v.check === 'pii_check')
+			.map((v) => v.detail.replace('PII column ', '').replace(' is blocked', ''));
 
-		for (const piiCol of piiColumns) {
-			// piiCol format: "public.customers.first_name"
-			const parts = piiCol.split('.');
-			const colName = parts[parts.length - 1];
-			const tableName = parts.length >= 2 ? parts[parts.length - 2] : '';
-
-			// Block if: column name in SQL text, OR SELECT * on a PII table
-			const colInSql = new RegExp(`\\b${colName}\\b`, 'i').test(sqlLower);
-			const starOnPiiTable = usesSelectStar && queriedTables.has(tableName);
-
-			if (colInSql || starOnPiiTable) {
-				blockedColumns.push(piiCol);
-			}
-		}
-
-		const piiPassed = blockedColumns.length === 0;
-		checks.push({
-			name: 'pii_check',
-			passed: piiPassed,
-			detail: piiPassed ? 'No PII columns detected' : `PII columns found: ${blockedColumns.join(', ')}`,
-		});
-		if (!piiPassed && policy.pii.mode === 'block') {
-			return {
-				allowed: false,
-				reason: `PII columns blocked by policy: ${blockedColumns.join(', ')}. Remove these columns from your query.`,
-				blocked_columns: blockedColumns,
-				checks,
-			};
-		}
-
-		// ── 7. LIMIT check ──
-		if (policy.execution.sql_validation.enforce_limit) {
-			checks.push({
-				name: 'limit_check',
-				passed: parsed.hasLimit,
-				detail: parsed.hasLimit ? `LIMIT ${parsed.limitValue}` : 'No LIMIT clause',
-			});
-			if (!parsed.hasLimit) {
-				return {
-					allowed: false,
-					reason: `Query must include a LIMIT clause (max ${policy.defaults.max_rows} rows)`,
-					checks,
-				};
-			}
-			if (parsed.limitValue && parsed.limitValue > policy.defaults.max_rows) {
-				checks.push({
-					name: 'limit_value',
-					passed: false,
-					detail: `LIMIT ${parsed.limitValue} exceeds max ${policy.defaults.max_rows}`,
-				});
-				return {
-					allowed: false,
-					reason: `LIMIT ${parsed.limitValue} exceeds maximum allowed rows (${policy.defaults.max_rows})`,
-					checks,
-				};
-			}
-		}
+		return {
+			allowed: false,
+			reason,
+			blocked_columns: blockedColumns.length > 0 ? blockedColumns : undefined,
+			checks,
+			policy_version: policyVersion,
+		};
 	}
 
-	// ── 8. All checks passed ──
+	// ── Allowed: build contract + collect PII columns for response filtering ──
 	const contractId = `contract-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-	checks.push({ name: 'approved', passed: true, detail: `Contract ${contractId}` });
+	const checks: GovernanceCheck[] = [{ name: 'approved', passed: true, detail: `Contract ${contractId}` }];
 
-	// Get all PII columns for defense-in-depth result filtering
+	// Defense-in-depth: collect all PII columns for result filtering
+	// (catalog-live here is fine — this is response filtering, not the gate)
 	const allPii = loader.getPiiColumns();
 	const catalog = getCatalogClient();
 	if (catalog) {
@@ -517,12 +332,12 @@ async function evaluateGovernanceInternal(params: EvaluateGovernanceParams): Pro
 
 	return {
 		allowed: true,
-		blocked_columns: blockedColumns,
 		all_pii_columns: [...allPii],
-		warnings,
+		warnings: [],
 		applicable_rules: [],
 		contract_id: contractId,
 		checks,
+		policy_version: policyVersion,
 	};
 }
 
@@ -535,7 +350,6 @@ export function filterPiiFromResults(
 ): Record<string, unknown>[] {
 	if (piiColumnNames.length === 0 || rows.length === 0) return rows;
 
-	// Extract just the column name (last part of dotted path)
 	const blocked = new Set(piiColumnNames.map((c) => c.split('.').pop()!.toLowerCase()));
 
 	return rows.map((row) => {
@@ -560,8 +374,6 @@ export function filterPiiFromFinding(finding: string): string {
 
 	for (const piiCol of piiColumns) {
 		const colName = piiCol.split('.').pop()!;
-		// Remove any values that look like they might be PII data
-		// This is a basic implementation — production would need NER
 		const pattern = new RegExp(`\\b${colName}\\b`, 'gi');
 		filtered = filtered.replace(pattern, '[REDACTED]');
 	}

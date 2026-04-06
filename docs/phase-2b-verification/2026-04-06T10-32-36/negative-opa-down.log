@@ -1,0 +1,11 @@
+[tracing] OpenTelemetry initialized → http://localhost:4318/v1/traces
+[harness] Loading scenario from: ../scenario/travel
+[harness] Scenario: SkyJet Travel Operations (travel)
+[harness] Database: postgresql://localhost:5433/travel_db
+[catalog] Provider: openmetadata
+[harness] Catalog: connected (http://localhost:8585)
+[harness] OPA health check FAILED: fetch failed
+[harness] Fatal error: Error: OPA sidecar is unreachable: fetch failed. Start it with: docker compose -f docker/docker-compose.opa.yml up -d
+    at initializeSharedState (C:\Users\hzmarrou\OneDrive\python\learning\dazense-context-infrastructure\harness\src\server.ts:89:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async main (C:\Users\hzmarrou\OneDrive\python\learning\dazense-context-infrastructure\harness\src\server.ts:366:18)
