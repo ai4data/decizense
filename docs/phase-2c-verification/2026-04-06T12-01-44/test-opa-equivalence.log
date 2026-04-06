@@ -1,0 +1,38 @@
+🧪 OPA Equivalence Battery — 28 cases
+
+  ✓ allow.flight_ops.basic                   expected=allow actual=allow
+  ✓ allow.flight_ops.airports                expected=allow actual=allow
+  ✓ allow.flight_ops.join                    expected=allow actual=allow
+  ✓ allow.flight_ops.delays_join             expected=allow actual=allow
+  ✓ allow.booking.basic                      expected=allow actual=allow
+  ✓ allow.booking.join                       expected=allow actual=allow
+  ✓ allow.booking.payments_join              expected=allow actual=allow
+  ✓ allow.customer_service.nonpii            expected=allow actual=allow
+  ✓ block.bundle_scope.flight_ops_reads_bookings expected=block actual=block
+  ✓ block.bundle_scope.booking_reads_flights expected=block actual=block
+  ✓ block.bundle_scope.customer_reads_payments expected=block actual=block
+  ✓ block.pii.first_name                     expected=block actual=block
+  ✓ block.pii.email_phone                    expected=block actual=block
+  ✓ block.pii.last_name                      expected=block actual=block
+  ✓ block.pii.select_star_customers          expected=block actual=block
+  ✓ block.limit.missing                      expected=block actual=block
+  ✓ block.limit.missing.booking              expected=block actual=block
+  ✓ block.limit.too_large                    expected=block actual=block
+  ✓ block.multi_statement                    expected=block actual=block
+  ✓ block.write.delete                       expected=block actual=block
+  ✓ block.write.update                       expected=block actual=block
+  ✓ block.write.drop                         expected=block actual=block
+  ✓ block.write.insert                       expected=block actual=block
+  ✓ block.join.not_allowlisted               expected=block actual=block
+  ✓ block.authenticate.unknown_agent         expected=block actual=block
+  ✓ block.can_query.orchestrator             expected=block actual=block
+  ✓ block.pii.where_clause                   expected=block actual=block
+  ✓ block.limit.over_max_999                 expected=block actual=block
+
+── Summary ──
+  total:  28
+  passed: 28
+  failed: 0
+
+✅ PASS — all in-code assertions matched expected outcomes
+   Phase 2a gate: now verify the harness stderr log has ZERO [opa-shadow] MISMATCH lines

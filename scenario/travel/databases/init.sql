@@ -328,3 +328,29 @@ CREATE INDEX idx_mem_entries_type ON memory_entries(memory_type);
 CREATE INDEX idx_mem_entries_scope ON memory_entries(scope_type, scope_id);
 CREATE INDEX idx_mem_entries_status ON memory_entries(status);
 CREATE INDEX idx_mem_entries_confidence ON memory_entries(confidence DESC);
+
+-- Layer 6: OPA governance decision logs (Phase 2c)
+-- Every governance evaluation (allow or deny) is logged with the full OPA
+-- input/result and the bundle revision that produced the decision. This
+-- enables replay_outcome and policy_drift_report admin tools.
+CREATE TABLE decision_logs (
+    opa_decision_id VARCHAR(100) PRIMARY KEY,
+    bundle_revision VARCHAR(64) NOT NULL,
+    timestamp       TIMESTAMP NOT NULL DEFAULT NOW(),
+    agent_id        VARCHAR(50) NOT NULL,
+    session_id      VARCHAR(100),
+    tool_name       VARCHAR(50) NOT NULL,
+    sql_hash        VARCHAR(64),
+    input           JSONB NOT NULL,
+    result          JSONB NOT NULL,
+    allowed         BOOLEAN NOT NULL,
+    contract_id     VARCHAR(100)
+);
+
+CREATE INDEX idx_decision_logs_session   ON decision_logs(session_id);
+CREATE INDEX idx_decision_logs_bundle    ON decision_logs(bundle_revision);
+CREATE INDEX idx_decision_logs_timestamp ON decision_logs(timestamp);
+
+-- Add bundle_revision to decision_outcomes so the outcome row links back
+-- to the policy version that governed the session's queries.
+ALTER TABLE decision_outcomes ADD COLUMN IF NOT EXISTS bundle_revision VARCHAR(64);

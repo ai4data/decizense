@@ -1,0 +1,36 @@
+🧪 Harness Connection Test
+
+Tools available: 34
+  get_context, get_entity_details, get_lineage, search_glossary, search_precedent, get_rationale, initialize_agent, get_business_rules, ingest_event, get_case_timeline, get_process_signals, query_data, query_metrics, execute_action, get_permissions, write_finding, read_findings, propose_decision, approve_decision, execute_decision_action, record_outcome, save_memory, recall_memory, verify_result, check_freshness, check_consistency, get_confidence, find_governance_gaps, simulate_removal, graph_stats, audit_decisions, replay_outcome, policy_drift_report, start_decision_workflow
+
+── initialize_agent(flight_ops) ──
+Agent: Flight Operations Agent
+Auth: config-only
+URI: agent://dazense.local/flight_ops
+Tables: public.flights, public.airports, public.airlines, public.flight_delays
+Measures: 9
+
+── query_data: delayed flights (should PASS) ──
+Status: success
+Rows: 3
+  NF856 — delayed
+  NF675 — delayed
+  NF224 — delayed
+
+── query_data: PII columns (should BLOCK) ──
+Status: blocked
+Reason: Table customers is not in bundle flights-ops
+
+── query_data: out-of-bundle table (should BLOCK) ──
+Status: blocked
+Reason: Table bookings is not in bundle flights-ops
+
+── get_business_rules(flights) ──
+Matched rules: 5
+  [error] checkin_window
+  [error] seat_uniqueness
+  [warning] overbooking_limit
+  [error] rebooking_priority_connections
+  [warning] reaccommodation_window
+
+✅ All tests passed!

@@ -1,0 +1,14 @@
+             opa_decision_id              |     agent_id     | tool_name  | allowed |                         bundle_revision                          |         timestamp          
+------------------------------------------+------------------+------------+---------+------------------------------------------------------------------+----------------------------
+ opa-6789346c-0a57-4843-9e32-7474267fb59b | booking          | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.471317
+ opa-2a09d65b-4992-4305-b80f-5a5d9c04832b | customer_service | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.435175
+ opa-b858ec1f-36fc-4c1e-bb30-9111f863833b | orchestrator     | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.398942
+ opa-c60c72ab-ba3a-47d4-8823-1f2c061fdd28 | flight_ops       | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.356356
+ opa-a0617d2d-7aa1-499d-9d64-9b7c8be3d2ed | booking          | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.313552
+ opa-d679c506-1332-41bb-a9fd-8dbc1ab68a93 | flight_ops       | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.264885
+ opa-3a959010-6ce7-4291-acee-72cbaf475c51 | booking          | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.217678
+ opa-0c1739c7-4fb1-474e-a8aa-83e5e1cdc354 | flight_ops       | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.168116
+ opa-fe0367e6-8fe5-495c-83ea-c036c0eab522 | flight_ops       | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.130856
+ opa-0b952407-10fc-4821-882f-1638f6e00c97 | flight_ops       | query_data | f       | 6f2d6259a36f86c63b07d930f7429694ea895c933b68eca8936b600b3655b3b2 | 2026-04-06 10:00:00.096316
+(10 rows)
+

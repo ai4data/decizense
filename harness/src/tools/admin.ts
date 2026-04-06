@@ -393,4 +393,202 @@ export function registerAdminTools(server: McpServer) {
 			}
 		},
 	);
+
+	// ─── Phase 2c admin tools ─────────────────────────────────────────────
+
+	const OPA_URL = process.env.OPA_URL ?? 'http://localhost:8181';
+
+	/**
+	 * Replay a single decision against the running OPA sidecar. Posts the
+	 * stored input to the OPA REST API and returns the replayed result.
+	 */
+	async function replayViaOpa(input: unknown): Promise<{ allow: boolean; violations: unknown[] }> {
+		const resp = await fetch(`${OPA_URL}/v1/data/dazense/governance/result`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ input }),
+		});
+		if (!resp.ok) throw new Error(`OPA replay HTTP ${resp.status}`);
+		const body = (await resp.json()) as { result?: { allow?: boolean; violations?: unknown[] } };
+		return {
+			allow: body.result?.allow ?? false,
+			violations: body.result?.violations ?? [],
+		};
+	}
+
+	/**
+	 * replay_outcome — Re-evaluate a past governance decision against the
+	 * currently loaded OPA policy bundle via the sidecar REST API.
+	 */
+	server.tool(
+		'replay_outcome',
+		'[Admin] Re-evaluate a past governance decision against current policy bundle',
+		{
+			opa_decision_id: z.string().describe('The decision log ID to replay'),
+		},
+		async ({ opa_decision_id }) => {
+			try {
+				const logResult = await executeQuery(
+					`SELECT opa_decision_id, bundle_revision, input, result, allowed, agent_id, tool_name, timestamp
+					 FROM decision_logs WHERE opa_decision_id = $1`,
+					[opa_decision_id],
+				);
+				if (logResult.rowCount === 0) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									error: `Decision ${opa_decision_id} not found in decision_logs`,
+								}),
+							},
+						],
+					};
+				}
+
+				const row = logResult.rows[0] as {
+					opa_decision_id: string;
+					bundle_revision: string;
+					input: unknown;
+					result: unknown;
+					allowed: boolean;
+					agent_id: string;
+					tool_name: string;
+					timestamp: string;
+				};
+
+				const replayed = await replayViaOpa(row.input);
+				const policyChanged = row.allowed !== replayed.allow;
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									opa_decision_id: row.opa_decision_id,
+									agent_id: row.agent_id,
+									tool_name: row.tool_name,
+									timestamp: row.timestamp,
+									original: {
+										allowed: row.allowed,
+										bundle_revision: row.bundle_revision,
+										result: row.result,
+									},
+									replayed: {
+										allowed: replayed.allow,
+										violations: replayed.violations,
+									},
+									policy_changed: policyChanged,
+									diff: policyChanged
+										? `Original: ${row.allowed ? 'ALLOW' : 'DENY'} -> Replay: ${replayed.allow ? 'ALLOW' : 'DENY'}`
+										: 'No change',
+								},
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: (err as Error).message }) }],
+				};
+			}
+		},
+	);
+
+	/**
+	 * policy_drift_report — Replay N recent governance decisions against
+	 * the currently loaded OPA policy bundle and report how many would now
+	 * be decided differently. Useful for impact analysis before deploying
+	 * a policy change: update data.json, restart OPA, run this tool.
+	 */
+	server.tool(
+		'policy_drift_report',
+		'[Admin] Replay recent decisions against current policy and report drift',
+		{
+			since: z.string().optional().describe('Only replay decisions after this timestamp (ISO format)'),
+			limit: z.number().optional().default(100).describe('Max decisions to replay'),
+		},
+		async ({ since, limit }) => {
+			try {
+				const conditions: string[] = [];
+				const params: unknown[] = [];
+
+				if (since) {
+					params.push(since);
+					conditions.push(`timestamp >= $${params.length}`);
+				}
+
+				const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+				params.push(limit ?? 100);
+				const limitParam = `$${params.length}`;
+
+				const logResult = await executeQuery(
+					`SELECT opa_decision_id, input, allowed, agent_id
+					 FROM decision_logs ${whereClause}
+					 ORDER BY timestamp DESC LIMIT ${limitParam}`,
+					params,
+				);
+
+				if (logResult.rowCount === 0) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({ total: 0, changed: 0, message: 'No decision logs found' }),
+							},
+						],
+					};
+				}
+
+				const changed: Array<{
+					opa_decision_id: string;
+					agent_id: string;
+					original_allowed: boolean;
+					replay_allowed: boolean;
+				}> = [];
+
+				for (const row of logResult.rows) {
+					const r = row as { opa_decision_id: string; input: unknown; allowed: boolean; agent_id: string };
+					try {
+						const replayed = await replayViaOpa(r.input);
+						if (r.allowed !== replayed.allow) {
+							changed.push({
+								opa_decision_id: r.opa_decision_id,
+								agent_id: r.agent_id,
+								original_allowed: r.allowed,
+								replay_allowed: replayed.allow,
+							});
+						}
+					} catch {
+						// OPA replay failed for this row — skip
+					}
+				}
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									total: logResult.rowCount,
+									changed: changed.length,
+									drift_rate: `${((changed.length / logResult.rowCount) * 100).toFixed(1)}%`,
+									examples: changed.slice(0, 10),
+								},
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify({ error: (err as Error).message }) }],
+				};
+			}
+		},
+	);
 }
