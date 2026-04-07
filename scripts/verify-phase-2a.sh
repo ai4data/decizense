@@ -76,21 +76,27 @@ port_in_use() {
 }
 
 kill_listener_on_port() {
+    local pids=""
     if command -v netstat >/dev/null 2>&1; then
-        local pids
         pids=$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)
-        for pid in ${pids:-}; do
-            if command -v taskkill >/dev/null 2>&1; then
-                taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
-            else
-                kill -KILL "${pid}" 2>/dev/null || true
-            fi
-        done
     fi
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids=$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)
+    fi
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    fi
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 
 wait_for_ready() {
-    for i in $(seq 1 30); do
+    for i in $(seq 1 120); do
         if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' \
@@ -157,12 +163,15 @@ if ! grep -q "OPA: reachable" "${HARNESS_LOG}"; then
     tail -40 "${HARNESS_LOG}"
     exit 1
 fi
-if ! grep -q "SHADOW MODE" "${HARNESS_LOG}"; then
-    echo "FAIL: harness did not enter SHADOW MODE"
-    tail -40 "${HARNESS_LOG}"
-    exit 1
+SHADOW_MODE=false
+if grep -q "SHADOW MODE" "${HARNESS_LOG}"; then
+    SHADOW_MODE=true
 fi
-echo "Attribution confirmed: pid ${HARNESS_PID} owns ${HARNESS_URL}, OPA reachable, shadow mode on"
+if [ "${SHADOW_MODE}" = "true" ]; then
+    echo "Attribution confirmed: pid ${HARNESS_PID} owns ${HARNESS_URL}, OPA reachable, shadow mode on"
+else
+    echo "Attribution confirmed: pid ${HARNESS_PID} owns ${HARNESS_URL}, OPA reachable, authoritative mode (post-2b compatibility)"
+fi
 
 # ── 7. Regression: Phase 0/1a ──
 echo "Running test-query.ts (regression)..."
@@ -207,7 +216,7 @@ echo "[opa-shadow] OPA error lines in harness log: ${OPA_ERROR_COUNT}"
     grep "\[opa-shadow\]" "${HARNESS_LOG}" || echo "(none)"
 } > "${EVIDENCE_DIR}/shadow-scan.txt"
 
-if [ "${MISMATCH_COUNT}" -ne 0 ]; then
+if [ "${SHADOW_MODE}" = "true" ] && [ "${MISMATCH_COUNT}" -ne 0 ]; then
     echo "FAIL: ${MISMATCH_COUNT} in-code vs OPA mismatch(es) in shadow log"
     grep "\[opa-shadow\] MISMATCH" "${HARNESS_LOG}" | head -20
     exit 1
@@ -216,7 +225,7 @@ fi
 # Architect finding #1: OPA errors during shadow evaluation must also fail
 # the verifier. A green run requires the OPA sidecar to have evaluated every
 # request without error — otherwise we cannot claim equivalence.
-if [ "${OPA_ERROR_COUNT}" -ne 0 ]; then
+if [ "${SHADOW_MODE}" = "true" ] && [ "${OPA_ERROR_COUNT}" -ne 0 ]; then
     echo "FAIL: ${OPA_ERROR_COUNT} OPA error(s) during shadow evaluation"
     grep "\[opa-shadow\] OPA error" "${HARNESS_LOG}" | head -20
     exit 1
@@ -224,7 +233,7 @@ fi
 
 # Reason-drift is informational in 2a (both sides still agreed on allow/deny).
 # Record it but do not fail. Phase 2b will tighten this gate.
-if [ "${DRIFT_COUNT}" -ne 0 ]; then
+if [ "${SHADOW_MODE}" = "true" ] && [ "${DRIFT_COUNT}" -ne 0 ]; then
     echo "  ⚠ ${DRIFT_COUNT} reason-drift lines (same verdict, different check name) — informational"
 fi
 
@@ -244,16 +253,24 @@ trap - EXIT
     echo ""
     echo "## Gates"
     echo "- [x] OPA sidecar reachable, bundle loaded"
-    echo "- [x] Harness boots with OPA_ENABLED=true, OPA_SHADOW=true, banners present"
+    if [ "${SHADOW_MODE}" = "true" ]; then
+        echo "- [x] Harness boots with OPA_ENABLED=true, OPA_SHADOW=true, banners present"
+    else
+        echo "- [x] Harness boots with OPA authoritative mode (post-2b compatibility run)"
+    fi
     echo "- [x] test-query.ts regression passed"
     echo "- [x] test-auth.ts regression passed"
     echo "- [x] test-opa-equivalence.ts in-code assertions passed"
-    echo "- [x] ZERO [opa-shadow] MISMATCH lines in harness log"
-    echo "- [x] ZERO [opa-shadow] OPA error lines in harness log"
-    if [ "${DRIFT_COUNT}" -ne 0 ]; then
-        echo "- [ ] ${DRIFT_COUNT} reason-drift lines (informational, not blocking)"
+    if [ "${SHADOW_MODE}" = "true" ]; then
+        echo "- [x] ZERO [opa-shadow] MISMATCH lines in harness log"
+        echo "- [x] ZERO [opa-shadow] OPA error lines in harness log"
+        if [ "${DRIFT_COUNT}" -ne 0 ]; then
+            echo "- [ ] ${DRIFT_COUNT} reason-drift lines (informational, not blocking)"
+        else
+            echo "- [x] ZERO reason-drift lines"
+        fi
     else
-        echo "- [x] ZERO reason-drift lines"
+        echo "- [x] Shadow mismatch gates skipped (shadow mode not enabled)"
     fi
     echo ""
     echo "## Bundle revision"

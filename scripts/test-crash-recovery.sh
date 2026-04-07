@@ -20,23 +20,31 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS_URL="http://127.0.0.1:9080/mcp"
 HARNESS_PORT=9080
 WORKFLOW_ID="wf-crash-recovery-$(date +%s)"
+TMPDIR_LOCAL="$(mktemp -d "${REPO_ROOT}/.tmp-crash-1b-XXXXXX")"
+trap 'kill_listener_on_port; rm -rf "${TMPDIR_LOCAL}"' EXIT
 
 echo "🧨 Phase 1b Crash Recovery Test"
 echo "Workflow ID: ${WORKFLOW_ID}"
 echo ""
 
 kill_listener_on_port() {
+    local pids=""
     if command -v netstat >/dev/null 2>&1; then
-        local pids
         pids=$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)
-        for pid in ${pids:-}; do
-            if command -v taskkill >/dev/null 2>&1; then
-                taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
-            else
-                kill -KILL "${pid}" 2>/dev/null || true
-            fi
-        done
     fi
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids=$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)
+    fi
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    fi
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 
 # Clean slate
@@ -52,21 +60,28 @@ echo "── Phase 1: harness with CRASH_AFTER_STEP=approve_decision ──"
     CRASH_AFTER_STEP=approve_decision \
     SCENARIO_PATH=../scenario/travel \
     exec npx tsx src/server.ts
-) > /tmp/phase1b-crash-run1.log 2>&1 &
+) > ${TMPDIR_LOCAL}/crash-run1.log 2>&1 &
 WRAPPER_PID=$!
 
 # Wait for harness ready
-for i in $(seq 1 30); do
+READY=0
+for i in $(seq 1 120); do
     if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
         -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -H 'X-Agent-Id: flight_ops' \
         -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"crash-test","version":"0.1"}}}' 2>/dev/null; then
         echo "  harness ready"
+        READY=1
         break
     fi
     sleep 1
 done
+if [ "${READY}" -ne 1 ]; then
+    echo "  ✗ FAIL: harness did not become ready"
+    tail -40 ${TMPDIR_LOCAL}/crash-run1.log || true
+    exit 1
+fi
 
 # Fire the workflow — will crash during approve_decision step.
 echo "  firing workflow (will crash)..."
@@ -85,11 +100,11 @@ kill_listener_on_port
 wait "${WRAPPER_PID}" 2>/dev/null || true
 sleep 2
 
-if grep -q "CRASH_AFTER_STEP=approve_decision" /tmp/phase1b-crash-run1.log; then
+if grep -q "CRASH_AFTER_STEP=approve_decision" ${TMPDIR_LOCAL}/crash-run1.log; then
     echo "  ✓ crash hook fired"
 else
     echo "  ✗ FAIL: crash hook did not fire"
-    tail -20 /tmp/phase1b-crash-run1.log
+    tail -20 ${TMPDIR_LOCAL}/crash-run1.log
     exit 1
 fi
 
@@ -107,7 +122,7 @@ echo "── Phase 2: restart harness (DBOS auto-recovery) ──"
     HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true \
     SCENARIO_PATH=../scenario/travel \
     exec npx tsx src/server.ts
-) > /tmp/phase1b-crash-run2.log 2>&1 &
+) > ${TMPDIR_LOCAL}/crash-run2.log 2>&1 &
 WRAPPER_PID2=$!
 
 # Wait for the recovered workflow to complete (give it time)
@@ -190,9 +205,9 @@ else
     echo "❌ FAIL — ${failures} assertion(s) failed"
     echo ""
     echo "── harness run 1 log (crashed) ──"
-    tail -30 /tmp/phase1b-crash-run1.log
+    tail -30 ${TMPDIR_LOCAL}/crash-run1.log
     echo ""
     echo "── harness run 2 log (recovery) ──"
-    tail -30 /tmp/phase1b-crash-run2.log
+    tail -30 ${TMPDIR_LOCAL}/crash-run2.log
     exit 1
 fi

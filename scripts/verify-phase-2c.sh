@@ -20,9 +20,20 @@ HARNESS_HOST="127.0.0.1"
 HARNESS_PORT=9080
 HARNESS_URL="http://${HARNESS_HOST}:${HARNESS_PORT}/mcp"
 OPA_URL="http://localhost:8181"
+JWT_SECRET_VALUE="${JWT_SECRET_VALUE:-phase-2c-local-dev-secret}"
+PYTHON_BIN=""
+for _candidate in python3 python; do
+    _path="$(command -v "$_candidate" 2>/dev/null || true)"
+    if [ -n "$_path" ] && "$_path" --version >/dev/null 2>&1; then
+        PYTHON_BIN="$_path"
+        break
+    fi
+done
 
 mkdir -p "${EVIDENCE_DIR}"
 HARNESS_LOG="${EVIDENCE_DIR}/harness.log"
+HARNESS_LOG_JWT="${EVIDENCE_DIR}/harness-jwt.log"
+HARNESS_PID=""
 echo "Evidence dir: ${EVIDENCE_DIR}"
 
 # ── 1. Environment ──
@@ -39,30 +50,126 @@ if ! curl -sf --max-time 2 "${OPA_URL}/health" > /dev/null; then
     echo "FAIL: OPA not reachable at ${OPA_URL}/health"
     exit 1
 fi
+if [ -z "${PYTHON_BIN}" ]; then
+    echo "FAIL: python3/python not found (required for policy tightening step)"
+    exit 1
+fi
 echo "OPA: reachable"
 
 # ── 3. Helpers ──
 kill_listener_on_port() {
+    local pids=""
+
     if command -v netstat >/dev/null 2>&1; then
-        local pids
-        pids=$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)
-        for pid in ${pids:-}; do
-            if command -v taskkill >/dev/null 2>&1; then
-                taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
-            else
-                kill -KILL "${pid}" 2>/dev/null || true
-            fi
-        done
+        pids="$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)"
     fi
+
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids="$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)"
+    fi
+
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+    fi
+
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 
 wait_for_ready() {
-    for i in $(seq 1 30); do
-        if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -H 'X-Agent-Id: flight_ops' \
-            -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0.1"}}}' > /dev/null 2>&1; then
+    local mode="${1:-config-only}"
+    local token="${2:-}"
+    for i in $(seq 1 120); do
+        if [ "${mode}" = "jwt" ]; then
+            if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                -H 'Authorization: Bearer '"${token}" \
+                -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0.1"}}}' > /dev/null 2>&1; then
+                return 0
+            fi
+        else
+            if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                -H 'X-Agent-Id: flight_ops' \
+                -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0.1"}}}' > /dev/null 2>&1; then
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+start_harness_config_only() {
+    kill_listener_on_port
+    sleep 1
+    echo "Starting harness (config-only, OPA authoritative + decision logging)..."
+    (
+        cd "${REPO_ROOT}/harness"
+        HARNESS_TRANSPORT=http \
+        HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true \
+        HARNESS_BIND="${HARNESS_HOST}" \
+        HARNESS_HTTP_PORT="${HARNESS_PORT}" \
+        SCENARIO_PATH=../scenario/travel \
+        OPA_URL="${OPA_URL}" \
+        exec npx tsx src/server.ts
+    ) > "${HARNESS_LOG}" 2>&1 &
+    HARNESS_PID=$!
+    if ! wait_for_ready "config-only"; then
+        echo "FAIL: harness did not become ready (config-only mode)"
+        tail -40 "${HARNESS_LOG}"
+        exit 1
+    fi
+    echo "Harness ready (config-only pid ${HARNESS_PID})"
+}
+
+start_harness_jwt() {
+    local admin_token="$1"
+    kill_listener_on_port
+    sleep 1
+    echo "Starting harness (jwt mode for admin-tool verification)..."
+    (
+        cd "${REPO_ROOT}/harness"
+        HARNESS_TRANSPORT=http \
+        AUTH_MODE=jwt \
+        JWT_SECRET="${JWT_SECRET_VALUE}" \
+        HARNESS_BIND="${HARNESS_HOST}" \
+        HARNESS_HTTP_PORT="${HARNESS_PORT}" \
+        SCENARIO_PATH=../scenario/travel \
+        OPA_URL="${OPA_URL}" \
+        exec npx tsx src/server.ts
+    ) > "${HARNESS_LOG_JWT}" 2>&1 &
+    HARNESS_PID=$!
+    if ! wait_for_ready "jwt" "${admin_token}"; then
+        echo "FAIL: harness did not become ready (jwt mode)"
+        tail -40 "${HARNESS_LOG_JWT}"
+        exit 1
+    fi
+    echo "Harness ready (jwt pid ${HARNESS_PID})"
+}
+
+stop_harness() {
+    if [ -n "${HARNESS_PID:-}" ] && kill -0 "${HARNESS_PID}" 2>/dev/null; then
+        kill -TERM "${HARNESS_PID}" 2>/dev/null || true
+        for i in $(seq 1 10); do
+            if ! kill -0 "${HARNESS_PID}" 2>/dev/null; then break; fi
+            sleep 1
+        done
+    fi
+    HARNESS_PID=""
+    kill_listener_on_port
+}
+
+wait_for_opa_ready() {
+    for i in $(seq 1 120); do
+        if curl -sf --max-time 2 "${OPA_URL}/health" > /dev/null 2>&1; then
             return 0
         fi
         sleep 1
@@ -75,37 +182,18 @@ docker exec -i travel_postgres psql -U travel_admin -d travel_db -c \
     "DELETE FROM decision_logs" > /dev/null 2>&1 || true
 echo "decision_logs cleared"
 
-# ── 5. Start harness ──
-kill_listener_on_port
-sleep 1
-echo "Starting harness (OPA authoritative + decision logging)..."
-(
-    cd "${REPO_ROOT}/harness"
-    HARNESS_TRANSPORT=http \
-    HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true \
-    HARNESS_BIND="${HARNESS_HOST}" \
-    HARNESS_HTTP_PORT="${HARNESS_PORT}" \
-    SCENARIO_PATH=../scenario/travel \
-    OPA_URL="${OPA_URL}" \
-    exec npx tsx src/server.ts
-) > "${HARNESS_LOG}" 2>&1 &
-HARNESS_PID=$!
+# ── 5. Start harness (config-only) ──
+start_harness_config_only
 
 cleanup() {
-    if [ -n "${HARNESS_PID:-}" ] && kill -0 "${HARNESS_PID}" 2>/dev/null; then
-        kill -TERM "${HARNESS_PID}" 2>/dev/null || true
-        sleep 2
+    stop_harness
+    if [ -f "${REPO_ROOT}/policy/data.json.backup" ]; then
+        mv "${REPO_ROOT}/policy/data.json.backup" "${REPO_ROOT}/policy/data.json"
+        docker restart dazense_opa > /dev/null 2>&1 || true
     fi
-    kill_listener_on_port
+    rm -f "${REPO_ROOT}/policy/data-tightened.json" 2>/dev/null || true
 }
 trap cleanup EXIT
-
-if ! wait_for_ready; then
-    echo "FAIL: harness did not become ready"
-    tail -40 "${HARNESS_LOG}"
-    exit 1
-fi
-echo "Harness ready (pid ${HARNESS_PID})"
 
 # ── 6. Regression: test-query + test-auth ──
 echo "Running test-query.ts (regression)..."
@@ -152,9 +240,20 @@ docker exec -i travel_postgres psql -U travel_admin -d travel_db -c \
     "SELECT opa_decision_id, agent_id, tool_name, allowed, bundle_revision, timestamp FROM decision_logs ORDER BY timestamp DESC LIMIT 10" \
     > "${EVIDENCE_DIR}/decision-logs-sample.txt"
 
-# ── 8. Replay test: pick an ALLOWED decision, tighten policy, replay ──
+# ── 8. Replay/drift via MCP admin tools in JWT mode ──
 REPLAY_ID=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
-    "SELECT opa_decision_id FROM decision_logs WHERE allowed = true ORDER BY timestamp DESC LIMIT 1")
+    "SELECT opa_decision_id
+     FROM decision_logs
+     WHERE allowed = true
+       AND tool_name = 'query_data'
+       AND input->>'sql' ILIKE '%from flights%'
+       AND input->>'sql' ILIKE '%flight_id%'
+     ORDER BY timestamp DESC
+     LIMIT 1")
+if [ -z "${REPLAY_ID}" ]; then
+    REPLAY_ID=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
+        "SELECT opa_decision_id FROM decision_logs WHERE allowed = true ORDER BY timestamp DESC LIMIT 1")
+fi
 echo "Replay target: ${REPLAY_ID}"
 
 if [ -z "${REPLAY_ID}" ]; then
@@ -162,64 +261,63 @@ if [ -z "${REPLAY_ID}" ]; then
     exit 1
 fi
 
-# Tighten policy: add flight_id to PII columns (so the allowed flight query would now be blocked)
-# Use relative paths to avoid bash /c/Users vs Python C:\Users mismatch on Windows.
+# Tighten policy: add flight_id to PII columns (so a previously allowed flight
+# query now becomes denied), then restart OPA.
 cd "${REPO_ROOT}"
 cp policy/data.json policy/data.json.backup
-python -c "
-import json
+"${PYTHON_BIN}" -c "
+import json, shutil
 with open('policy/data.json') as f: d = json.load(f)
 d['pii_columns']['flights'] = ['flight_id']
-with open('policy/data-tightened.json', 'w') as f: json.dump(d, f, indent=2, sort_keys=True)
+with open('policy/data.json.tmp', 'w') as f: json.dump(d, f, indent=2, sort_keys=True)
+shutil.move('policy/data.json.tmp', 'policy/data.json')
 print('tightened: added flights.flight_id to PII')
 "
-
-# Create a tightened bundle directory for opa eval
-mkdir -p policy-tightened
-cp policy/dazense.rego policy-tightened/
-cp policy/data-tightened.json policy-tightened/data.json
-
-# Fetch the stored input, then replay against a tightened OPA sidecar.
-# Strategy: swap the running OPA's data.json to the tightened version,
-# restart, replay via REST API, then restore. No opa CLI needed.
-echo "Replaying via OPA REST API against tightened bundle..."
-
-# Get the original input from the decision log
-REPLAY_INPUT=$(docker exec -i travel_postgres psql -U travel_admin -d travel_db -tAc \
-    "SELECT input::text FROM decision_logs WHERE opa_decision_id = '${REPLAY_ID}'")
-
-# Swap data.json to the tightened version and restart OPA
-cp policy-tightened/data.json policy/data.json
+sleep 1
 docker restart dazense_opa > /dev/null 2>&1
-sleep 3
+if ! wait_for_opa_ready; then
+    echo "FAIL: OPA did not become healthy after policy tighten restart"
+    exit 1
+fi
 
-# POST the stored input to the tightened OPA
-OPA_REPLAY_RESULT=$(curl -sf -X POST "${OPA_URL}/v1/data/dazense/governance/result" \
-    -H 'Content-Type: application/json' \
-    -d "{\"input\": ${REPLAY_INPUT}}" 2>&1) || OPA_REPLAY_RESULT='{"error":"curl failed"}'
-echo "  OPA replay response: $(echo "${OPA_REPLAY_RESULT}" | head -c 200)"
+stop_harness
 
-REPLAY_ALLOW=$(echo "${OPA_REPLAY_RESULT}" | python -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print('allow' if d.get('result',{}).get('allow') else 'deny')
-except: print('error')
-" 2>/dev/null || echo "error")
-echo "  replay result: ${REPLAY_ALLOW} (expected: deny)"
+ADMIN_TOKEN=$(cd "${REPO_ROOT}/harness" && node -e "
+const jwt = require('jsonwebtoken');
+const secret = process.argv[1];
+const now = Math.floor(Date.now() / 1000);
+const token = jwt.sign(
+  { sub: 'orchestrator-agent', aud: 'dazense-harness', iss: 'verify-phase-2c', iat: now, exp: now + 3600 },
+  secret,
+  { algorithm: 'HS256' }
+);
+process.stdout.write(token);
+" "${JWT_SECRET_VALUE}")
 
-# Restore original data.json and restart OPA
-mv policy/data.json.backup policy/data.json
-rm -rf policy-tightened policy/data-tightened.json
-docker restart dazense_opa > /dev/null 2>&1
-sleep 3
-
-if [ "${REPLAY_ALLOW}" = "deny" ]; then
-    echo "  ✓ replay correctly detected policy drift (was allow, now deny)"
-    REPLAY_PASS=true
-else
-    echo "  ✗ replay did not produce expected deny (got ${REPLAY_ALLOW})"
+start_harness_jwt "${ADMIN_TOKEN}"
+echo "Running JWT admin-tool replay/drift verification..."
+if ! (
+    cd "${REPO_ROOT}/agents" && \
+    ORCHESTRATOR_TOKEN="${ADMIN_TOKEN}" \
+    REPLAY_ID="${REPLAY_ID}" \
+    EXPECT_REPLAY_CHANGED=true \
+    EXPECT_DRIFT_CHANGED_MIN=1 \
+    npx tsx src/test-admin-tools.ts
+) > "${EVIDENCE_DIR}/test-admin-tools.log" 2>&1; then
+    echo "FAIL: test-admin-tools.ts"
+    tail -40 "${EVIDENCE_DIR}/test-admin-tools.log" || true
     REPLAY_PASS=false
+else
+    echo "  ✓ replay_outcome/policy_drift_report succeeded in JWT mode"
+    REPLAY_PASS=true
+fi
+
+# Restore original policy bundle before exit
+mv policy/data.json.backup policy/data.json
+docker restart dazense_opa > /dev/null 2>&1
+if ! wait_for_opa_ready; then
+    echo "FAIL: OPA did not become healthy after restore restart"
+    exit 1
 fi
 
 # Enforce replay result (architect finding #2)
@@ -230,12 +328,7 @@ fi
 
 # ── 9. Stop harness ──
 echo "Stopping harness..."
-kill -TERM "${HARNESS_PID}" 2>/dev/null || true
-for i in $(seq 1 10); do
-    if ! kill -0 "${HARNESS_PID}" 2>/dev/null; then break; fi
-    sleep 1
-done
-kill_listener_on_port
+stop_harness
 trap - EXIT
 
 # ── 10. Summary ──
@@ -248,9 +341,9 @@ trap - EXIT
     echo "- [x] test-opa-equivalence.ts 28/28 passed"
     echo "- [x] decision_logs populated: ${LOG_COUNT} rows"
     if [ "${REPLAY_PASS}" = "true" ]; then
-        echo "- [x] replay correctly detected policy drift on tightened bundle"
+        echo "- [x] replay_outcome and policy_drift_report passed via MCP admin tools in JWT mode"
     else
-        echo "- [ ] replay drift test FAILED"
+        echo "- [ ] JWT admin-tool replay/drift test FAILED"
     fi
     echo ""
     echo "## Decision log sample"

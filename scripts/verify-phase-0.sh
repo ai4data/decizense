@@ -29,6 +29,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TIMESTAMP="$(date +%Y-%m-%dT%H-%M-%S)"
 EVIDENCE_DIR="${REPO_ROOT}/docs/phase-0-verification/${TIMESTAMP}"
 JAEGER_API="http://localhost:16686/api"
+HARNESS_HOST="127.0.0.1"
+HARNESS_PORT=9080
+HARNESS_URL="http://${HARNESS_HOST}:${HARNESS_PORT}/mcp"
+HARNESS_LOG="${EVIDENCE_DIR}/harness.log"
+HARNESS_PID=""
 
 mkdir -p "${EVIDENCE_DIR}"
 echo "Evidence dir: ${EVIDENCE_DIR}"
@@ -52,7 +57,80 @@ if ! curl -sf "${JAEGER_API}/services" > /dev/null; then
     exit 1
 fi
 
-# ── 3. Run tests ──
+# ── 3. Start harness (self-contained verification) ──
+kill_listener_on_port() {
+    local pids=""
+    if command -v netstat >/dev/null 2>&1; then
+        pids="$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)"
+    fi
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids="$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)"
+    fi
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+    fi
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
+}
+
+wait_for_ready() {
+    for i in $(seq 1 120); do
+        if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H 'X-Agent-Id: flight_ops' \
+            -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0.1"}}}' > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+stop_harness() {
+    if [ -n "${HARNESS_PID:-}" ] && kill -0 "${HARNESS_PID}" 2>/dev/null; then
+        kill -TERM "${HARNESS_PID}" 2>/dev/null || true
+        for i in $(seq 1 10); do
+            if ! kill -0 "${HARNESS_PID}" 2>/dev/null; then break; fi
+            sleep 1
+        done
+    fi
+    HARNESS_PID=""
+    kill_listener_on_port
+}
+
+cleanup() {
+    stop_harness
+}
+trap cleanup EXIT
+
+kill_listener_on_port
+sleep 1
+echo "Starting harness for Phase 0 verification..."
+(
+    cd "${REPO_ROOT}/harness"
+    HARNESS_TRANSPORT=http \
+    HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true \
+    HARNESS_BIND="${HARNESS_HOST}" \
+    HARNESS_HTTP_PORT="${HARNESS_PORT}" \
+    SCENARIO_PATH=../scenario/travel \
+    exec npx tsx src/server.ts
+) > "${HARNESS_LOG}" 2>&1 &
+HARNESS_PID=$!
+
+if ! wait_for_ready; then
+    echo "FAIL: harness did not become ready"
+    tail -40 "${HARNESS_LOG}" || true
+    exit 1
+fi
+echo "Harness ready (pid ${HARNESS_PID})"
+
+# ── 4. Run tests ──
 echo "Running test-query.ts..."
 (cd "${REPO_ROOT}/agents" && npx tsx src/test-query.ts) > "${EVIDENCE_DIR}/test-query.log" 2>&1
 echo "  → test-query.log"
@@ -64,12 +142,12 @@ echo "  → test-auth.log"
 # Give Jaeger a moment to ingest spans
 sleep 3
 
-# ── 4. Dump Jaeger evidence ──
+# ── 5. Dump Jaeger evidence ──
 curl -s "${JAEGER_API}/services" > "${EVIDENCE_DIR}/services.json"
 curl -s "${JAEGER_API}/traces?service=dazense-test-query&limit=1" > "${EVIDENCE_DIR}/test-query.json"
 curl -s "${JAEGER_API}/traces?service=dazense-test-auth&limit=1" > "${EVIDENCE_DIR}/test-auth.json"
 
-# ── 5. Build summary ──
+# ── 6. Build summary ──
 # Detect a working Python. On Windows, `python3` is often a Store stub that
 # opens the Store instead of running Python — so we prefer `python` there.
 PY=""
