@@ -186,6 +186,12 @@ Implement `ICatalogClient` in `harness/src/catalog/atlan.ts`. See `cookbook/05-c
 
 See [docs/architecture.md](docs/architecture.md) for the full 5-layer architecture.
 
+## End-to-end testing
+
+For a full Plan v3 validation runbook (CLI + UI), see:
+
+- [docs/PLAN_V3_E2E_TESTING_TUTORIAL.md](docs/PLAN_V3_E2E_TESTING_TUTORIAL.md)
+
 ## License
 
 Apache 2.0

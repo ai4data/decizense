@@ -2,6 +2,10 @@
 
 This guide walks through testing all components of the harness: infrastructure, governance, agents, multi-agent orchestration, memory, and the proving workflow.
 
+For the full Plan v3 end-to-end validation runbook (including UI and umbrella verifier), see:
+
+- [PLAN_V3_E2E_TESTING_TUTORIAL.md](./PLAN_V3_E2E_TESTING_TUTORIAL.md)
+
 ## Quick smoke test
 
 Run the automated smoke test:
