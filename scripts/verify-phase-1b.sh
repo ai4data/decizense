@@ -59,21 +59,27 @@ port_in_use() {
 }
 
 kill_listener_on_port() {
+    local pids=""
     if command -v netstat >/dev/null 2>&1; then
-        local pids
         pids=$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)
-        for pid in ${pids:-}; do
-            if command -v taskkill >/dev/null 2>&1; then
-                taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
-            else
-                kill -KILL "${pid}" 2>/dev/null || true
-            fi
-        done
     fi
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids=$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)
+    fi
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    fi
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 
 wait_for_ready() {
-    for i in $(seq 1 30); do
+    for i in $(seq 1 120); do
         if curl -sf --max-time 1 -o /dev/null -X POST "${HARNESS_URL}" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' \

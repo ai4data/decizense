@@ -89,12 +89,16 @@ echo "Port ${HARNESS_PORT}: free"
 echo "Starting harness HTTP server..."
 (
     cd "${REPO_ROOT}/harness"
+    TSX_BIN="./node_modules/.bin/tsx"
+    if [ ! -x "${TSX_BIN}" ]; then
+        TSX_BIN="npx tsx"
+    fi
     HARNESS_TRANSPORT=http \
     HARNESS_ALLOW_INSECURE_CONFIG_ONLY=true \
     HARNESS_BIND="${HARNESS_HOST}" \
     HARNESS_HTTP_PORT="${HARNESS_PORT}" \
     SCENARIO_PATH=../scenario/travel \
-    exec npx tsx src/server.ts
+    exec ${TSX_BIN} src/server.ts
 ) > "${HARNESS_LOG}" 2>&1 &
 HARNESS_PID=$!
 echo "  spawned pid: ${HARNESS_PID}"
@@ -103,17 +107,23 @@ kill_listener_on_port() {
     # Cross-platform: kill whoever is LISTENING on $HARNESS_PORT.
     # On Git-Bash/Windows the spawned bash wrapper's kill doesn't cascade to
     # the real node.exe child, so we also force-kill by port.
+    local pids=""
     if command -v netstat >/dev/null 2>&1; then
-        local pids
         pids=$(netstat -ano 2>/dev/null | grep -E "[:.]${HARNESS_PORT}\s+[^ ]+\s+LISTENING" | awk '{print $NF}' | sort -u || true)
-        for pid in ${pids:-}; do
-            if command -v taskkill >/dev/null 2>&1; then
-                taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
-            else
-                kill -KILL "${pid}" 2>/dev/null || true
-            fi
-        done
     fi
+    if [ -z "${pids}" ] && command -v ss >/dev/null 2>&1; then
+        pids=$(ss -ltnp "( sport = :${HARNESS_PORT} )" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,","); print a[1]}' | sort -u || true)
+    fi
+    if [ -z "${pids}" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti tcp:${HARNESS_PORT} -sTCP:LISTEN 2>/dev/null | sort -u || true)
+    fi
+    for pid in ${pids:-}; do
+        if command -v taskkill >/dev/null 2>&1; then
+            taskkill //F //PID "${pid}" >/dev/null 2>&1 || true
+        else
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    done
 }
 
 cleanup() {
@@ -133,7 +143,7 @@ trap cleanup EXIT
 # Wait for /mcp to respond AND verify the spawned PID owns it.
 echo "Waiting for harness readiness + attribution..."
 READY=false
-for i in $(seq 1 30); do
+for i in $(seq 1 120); do
     # Did our spawned process die?
     if ! kill -0 "${HARNESS_PID}" 2>/dev/null; then
         echo "FAIL: spawned harness (pid ${HARNESS_PID}) died during startup"
@@ -161,7 +171,7 @@ for i in $(seq 1 30); do
     sleep 1
 done
 if [ "${READY}" != "true" ]; then
-    echo "FAIL: harness did not become ready in 30s"
+    echo "FAIL: harness did not become ready in 120s"
     tail -40 "${HARNESS_LOG}"
     exit 1
 fi
