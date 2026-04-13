@@ -193,6 +193,21 @@ Tests:
 - Business rules: 5 matched for flights
 ```
 
+When run via `bash scripts/smoke-test.sh`, a second deterministic block follows:
+
+```
+Semantic-grounding plumbing test
+  ✓ FQN present for flights
+  ✓ real date column with type
+  ... (24 prompt-builder assertions + 4 callLLM-fallback assertions)
+✅ All 28 assertions passed
+```
+
+This second test exercises the Tier 1 plumbing — the pure builder that
+forwards the harness's authoritative columns / measures / dimensions /
+allowed_joins / rule guidance into every sub-agent's system prompt. It
+runs with no LLM and no harness calls, so it's deterministic and CI-safe.
+
 ---
 
 ## Part 2: Governance Tests
@@ -331,25 +346,59 @@ Expected: **Blocked** or no names shown — PII columns are blocked.
 
 **Tests:** Multi-agent orchestration · Workflow durability (DBOS) · Decision lifecycle · Memory & precedent · Tracing (parent / child spans across agents)
 
+> **Prerequisite — set `WORKFLOW_ID`.** Plan v3 R2.1 makes the workflow
+> ID a required, caller-supplied input so crash-recovery can resume the
+> exact same run. The orchestrator script exits with code 2 if it is
+> missing. Pick any string starting with `orch-`; reuse the same value
+> to resume after a crash, change it for a fresh run.
+>
+> **Linux / macOS / WSL:**
+>
+> ```bash
+> export WORKFLOW_ID=orch-demo-$(date +%s)
+> ```
+>
+> **Windows (PowerShell):**
+>
+> ```powershell
+> $env:WORKFLOW_ID = "orch-demo-$(Get-Date -Format yyyyMMddHHmmss)"
+> ```
+
 ```bash
 npx tsx src/orchestrator.ts "What is the operational health of our airline in March 2026?"
 ```
 
-Expected:
+Expected (deep-agent loop):
 
-1. Orchestrator plans: involves flight_ops + booking agents
-2. flight_ops reports: 115 delays, top reasons, delay patterns
-3. booking reports: 65K bookings, cancellation rate, revenue
-4. Orchestrator combines: overall health assessment with confidence score
-5. Decision recorded as precedent
+1. **Plan** — the orchestrator calls `write_todos` once with 3–6 sub-questions
+   that each name an entity, a metric, and a time window.
+2. **Task spawns** — one `task(subagent_type, description)` call per turn,
+   reusing existing flight*ops / booking / customer_service identities. Each
+   spawn shows up in stdout as `[<agent>] <answer>` and as a DBOS step
+   `task*<N>\_<agent>`in`dbos.operation_outputs`.
+3. **(Optional) write_note** — interim facts persisted in the workflow's
+   scratchpad so they survive crash-recovery without re-querying.
+4. **Finalize** — `finalize({decision, confidence, evidence})` records an
+   outcome via `harness.record_outcome`, and the loop exits. Stdout shows
+   `Outcome stored: true` and `✅ Orchestrator workflow completed`.
 
-Note: LLM orchestration is probabilistic. If you see `No answer generated within step limit`, treat it as a runtime degradation (not a governance failure) and use Troubleshooting.
+The deep-agent will choose `confidence: low` and **honestly surface gaps**
+when sub-agents return blocked results — that is the correct, governed
+behaviour, not a test failure. (Today, the most common cause of `low` on
+exec-style questions is a sub-agent SQL hallucination that the harness
+blocks; Tier 2 of the semantic-layer fix gives the sub-agent live lookup
+tools to mitigate. See the design doc.)
+
+If you see `No answer generated within step limit` — that path is now
+guarded: callLLM falls back to the last tool result and returns
+`Blocked by governance: <reason>` or `Tool error: <reason>` instead.
 
 ```bash
 npx tsx src/orchestrator.ts "How many flights were delayed and what was the revenue impact?"
 ```
 
-Expected: Both agents contribute findings, orchestrator synthesizes.
+Expected: 2–3 task spawns (delays from flight_ops, revenue from booking),
+finalize with confidence high if all sub-agents return numbers.
 
 ---
 
@@ -426,13 +475,15 @@ Expected: can_propose [low, medium, high], can_approve [low], can_execute [low].
 
 **Tests:** Risk classification · Decision lifecycle · Permissions (auto-execute denied for `high`) · Multi-agent orchestration
 
+> Same `WORKFLOW_ID` rule as Part 4 — set `$env:WORKFLOW_ID = "orch-rebook-$(Get-Date -Format yyyyMMddHHmmss)"` (PowerShell) or `export WORKFLOW_ID=orch-rebook-$(date +%s)` (bash) before running.
+
 Ask the orchestrator:
 
 ```bash
 npx tsx src/orchestrator.ts "Rebook the passenger on flight NF856 to the next available flight"
 ```
 
-Expected: Rebooking is `high` risk → requires human approval → agent cannot auto-execute.
+Expected: the orchestrator plans, spawns a `task(booking, ...)` to look up the booking + connection, and then `finalize`s with a proposed action carrying `risk_class: high`. The harness's permission matrix denies auto-execute on `high`, so the recorded outcome surfaces a `requires_approval: true` flag rather than executing the rebooking. Agent cannot auto-execute.
 
 ---
 
