@@ -32,6 +32,54 @@ import { useDebounce } from '@/hooks/use-debounce';
 
 const DEBUG_MESSAGES = false;
 
+function extractBlockedReasons(parts: UIMessage['parts']): string[] {
+	const reasons: string[] = [];
+	for (const part of parts) {
+		if (!isToolUIPart(part)) {
+			continue;
+		}
+		const reason = readBlockedReason((part as { output?: unknown }).output);
+		if (reason) {
+			reasons.push(reason);
+		}
+	}
+	return Array.from(new Set(reasons));
+}
+
+function readBlockedReason(output: unknown): string | null {
+	if (!output) {
+		return null;
+	}
+	if (typeof output === 'object') {
+		const o = output as { status?: unknown; reason?: unknown; content?: unknown };
+		if (o.status === 'blocked' && typeof o.reason === 'string' && o.reason.trim()) {
+			return o.reason;
+		}
+		if (Array.isArray(o.content)) {
+			for (const c of o.content) {
+				if (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text') {
+					const nested = readBlockedReason(tryParseJson((c as { text?: unknown }).text));
+					if (nested) {
+						return nested;
+					}
+				}
+			}
+		}
+	}
+	return null;
+}
+
+function tryParseJson(v: unknown): unknown {
+	if (typeof v !== 'string') {
+		return null;
+	}
+	try {
+		return JSON.parse(v);
+	} catch {
+		return null;
+	}
+}
+
 export function ChatMessages() {
 	const chatId = useParams({ strict: false }).chatId;
 	const contentRef = useRef<HTMLDivElement>(null);
@@ -194,6 +242,7 @@ const AssistantMessageBlock = ({
 	const groupedParts = useMemo(() => groupToolCalls(message.parts), [message.parts]);
 	const isSettled = !isRunning || !isLastMessage;
 	const hasText = useMemo(() => message.parts.some((p) => p.type === 'text'), [message.parts]);
+	const blockedReasons = useMemo(() => extractBlockedReasons(message.parts), [message.parts]);
 
 	if (!message.parts.length && !showResponseLoader) {
 		return null;
@@ -236,7 +285,20 @@ const AssistantMessageBlock = ({
 				}
 			})}
 
-			{isSettled && !hasText && <div className='text-muted-foreground italic text-sm'>No response</div>}
+			{isSettled && !hasText && blockedReasons.length > 0 && (
+				<div className='rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm'>
+					<div className='font-medium mb-1'>Request blocked by governance policy</div>
+					<ul className='list-disc pl-5 space-y-0.5'>
+						{blockedReasons.map((r, i) => (
+							<li key={i}>{r}</li>
+						))}
+					</ul>
+				</div>
+			)}
+
+			{isSettled && !hasText && blockedReasons.length === 0 && (
+				<div className='text-muted-foreground italic text-sm'>No response</div>
+			)}
 
 			{showResponseLoader && <TextShimmer />}
 

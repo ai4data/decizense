@@ -1,0 +1,11 @@
+{
+	"mcpServers": {
+		"harness": {
+			"type": "http",
+			"url": "http://127.0.0.1:9080/mcp",
+			"headers": {
+				"X-Agent-Id": "flight_ops"
+			}
+		}
+	}
+}

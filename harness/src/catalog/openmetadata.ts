@@ -32,23 +32,64 @@ export class OpenMetadataCatalogClient implements ICatalogClient {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ email: this.email, password: b64Pass }),
 		});
-		const data = (await resp.json()) as { accessToken: string };
+		if (!resp.ok) {
+			const text = await resp.text().catch(() => '');
+			throw new Error(`OpenMetadata login failed: ${resp.status} ${text.slice(0, 200)}`);
+		}
+		const data = (await resp.json()) as { accessToken?: string };
+		if (!data.accessToken) {
+			throw new Error('OpenMetadata login response missing accessToken');
+		}
 		this.token = data.accessToken;
 		return this.token;
 	}
 
 	private async get(path: string, params?: Record<string, string>): Promise<unknown> {
-		const token = await this.getToken();
+		return this.requestJson('GET', path, { params });
+	}
+
+	/**
+	 * Single entry point for authenticated OMD calls. On 401 we assume the
+	 * cached JWT expired (OMD's default TTL is ~1h), drop it, and retry once
+	 * with a fresh token. Any non-2xx that survives the retry throws — that
+	 * way callers like listTables() never see a malformed body and crash on
+	 * `data.data.filter(...)`.
+	 */
+	private async requestJson(
+		method: string,
+		path: string,
+		opts: { params?: Record<string, string>; body?: unknown } = {},
+	): Promise<unknown> {
 		const url = new URL(`${this.baseUrl}${path}`);
-		if (params) {
-			for (const [k, v] of Object.entries(params)) {
+		if (opts.params) {
+			for (const [k, v] of Object.entries(opts.params)) {
 				url.searchParams.set(k, v);
 			}
 		}
-		const resp = await fetch(url.toString(), {
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		return resp.json();
+
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const token = await this.getToken();
+			const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+			if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+
+			const resp = await fetch(url.toString(), {
+				method,
+				headers,
+				...(opts.body !== undefined && { body: JSON.stringify(opts.body) }),
+			});
+
+			if (resp.status === 401 && attempt === 0) {
+				this.token = null;
+				continue;
+			}
+			if (!resp.ok) {
+				const text = await resp.text().catch(() => '');
+				throw new Error(`OpenMetadata ${method} ${path} failed: ${resp.status} ${text.slice(0, 200)}`);
+			}
+			return resp.json();
+		}
+
+		throw new Error(`OpenMetadata ${method} ${path} failed: unauthorized after token refresh`);
 	}
 
 	async listTables(): Promise<CatalogTable[]> {
@@ -152,16 +193,7 @@ export class OpenMetadataCatalogClient implements ICatalogClient {
 
 	async sparql(query: string): Promise<Array<Record<string, { type: string; value: string }>>> {
 		try {
-			const token = await this.getToken();
-			const resp = await fetch(`${this.baseUrl}/api/v1/rdf/sparql`, {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${token}`,
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({ query }),
-			});
-			const data = (await resp.json()) as {
+			const data = (await this.requestJson('POST', '/api/v1/rdf/sparql', { body: { query } })) as {
 				results?: { bindings: Array<Record<string, { type: string; value: string }>> };
 			};
 			return data.results?.bindings ?? [];
