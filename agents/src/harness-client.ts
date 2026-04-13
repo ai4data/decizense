@@ -14,6 +14,25 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { exportTraceContext } from './tracing.js';
 
+export interface EntityDetailsColumn {
+	name: string;
+	type: string;
+	description?: string;
+	pii?: boolean;
+}
+
+export interface EntityDetails {
+	name: string;
+	fqn: string;
+	description?: string;
+	tier?: string | null;
+	owners?: Array<{ name: string; type: string }>;
+	tags?: string[];
+	pii_columns?: string[];
+	columns: EntityDetailsColumn[];
+	error?: string;
+}
+
 export class HarnessClient {
 	private client: Client;
 	private transport: StreamableHTTPClientTransport | null = null;
@@ -88,6 +107,10 @@ export class HarnessClient {
 			tables,
 			metric_refs: metricRefs,
 		});
+	}
+
+	async getEntityDetails(entityId: string): Promise<EntityDetails> {
+		return (await this.callTool('get_entity_details', { entity_id: entityId })) as EntityDetails;
 	}
 
 	async writeFinding(
