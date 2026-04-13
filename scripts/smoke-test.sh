@@ -94,4 +94,7 @@ echo "[smoke] Running harness core test (no LLM)..."
 cd "${ROOT_DIR}/agents"
 ./node_modules/.bin/tsx src/test-query.ts
 
+echo "[smoke] Running semantic-layer plumbing regression (no LLM, no harness calls)..."
+./node_modules/.bin/tsx src/test-semantic-grounding.ts
+
 echo "[smoke] OK"

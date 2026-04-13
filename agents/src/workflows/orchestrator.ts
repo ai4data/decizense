@@ -32,6 +32,7 @@ import { HarnessClient } from '../harness-client.js';
 import { callLLM } from '../llm.js';
 import { maybeCrashAfter } from './debug-crash.js';
 import { buildSystemPrompt } from './deep-agent/prompts.js';
+import { buildSubagentSystemPrompt } from './deep-agent/sub-agent-prompt.js';
 import { initialState, renderState, type DeepAgentState } from './deep-agent/state.js';
 import { ALLOWED_SUBAGENTS, createTaskTool, type AllowedSubagent } from './deep-agent/tools/task.js';
 import { createFinalizeTool } from './deep-agent/tools/finalize.js';
@@ -104,34 +105,72 @@ async function runSubagentStep(agentId: string, subQuestion: string, sessionId: 
 	return withHarnessClient(agentId, async (harness) => {
 		const init = (await harness.initializeAgent(sessionId, subQuestion)) as {
 			identity?: { authenticated?: boolean; display_name?: string };
-			scope?: { tables?: string[] };
+			scope?: {
+				tables?: string[];
+				measures?: string[];
+				dimensions?: string[];
+				allowed_joins?: string[];
+				blocked_columns?: string[];
+			};
 			constraints?: { max_rows?: number };
 			system_prompt?: string;
 		};
 		if (!init.identity?.authenticated) {
 			return { agentId, answer: `Agent ${agentId} not authenticated` };
 		}
-		const tables = init.scope?.tables?.join(', ') ?? 'none';
-		const rules = (await harness.getBusinessRules(
-			init.scope?.tables?.map((t: string) => t.split('.').pop() ?? '') ?? [],
-		)) as {
-			matched_rules?: Array<{ severity: string; name: string; description: string }>;
-		};
-		const rulesContext = (rules.matched_rules ?? [])
-			.map((r) => `- [${r.severity}] ${r.name}: ${r.description}`)
-			.join('\n');
 
-		const systemPrompt = `${init.system_prompt ?? ''}
-Tables: ${tables}
-Max rows: ${init.constraints?.max_rows ?? 500}. Always include LIMIT.
-${rulesContext ? `Rules:\n${rulesContext}` : ''}
-ONLY query tables in your bundle. Be concise. Return a factual finding.`;
+		const tables = init.scope?.tables ?? [];
+		const bareTableNames = tables.map((t) => t.split('.').pop() ?? t);
+
+		// Fetch live entity details for every table in scope — this is the
+		// authoritative column list that previously lived only as hand-typed
+		// prose in scenario/travel/agents.yml. Failures per table fall through
+		// to the builder which surfaces them as "(details unavailable)" so a
+		// flaky catalog never takes the whole run down.
+		const entityDetails = await Promise.all(
+			bareTableNames.map(async (name) => {
+				try {
+					return await harness.getEntityDetails(name);
+				} catch (err) {
+					return {
+						name,
+						fqn: name,
+						columns: [],
+						error: err instanceof Error ? err.message : String(err),
+					};
+				}
+			}),
+		);
+
+		const rulesResp = (await harness.getBusinessRules(bareTableNames)) as {
+			matched_rules?: Array<{
+				severity: string;
+				name: string;
+				description?: string;
+				guidance?: string;
+				rationale?: string | null;
+			}>;
+		};
+
+		const systemPrompt = buildSubagentSystemPrompt({
+			basePrompt: init.system_prompt ?? '',
+			maxRows: init.constraints?.max_rows ?? 500,
+			scope: {
+				tables,
+				measures: init.scope?.measures ?? [],
+				dimensions: init.scope?.dimensions ?? [],
+				allowedJoins: init.scope?.allowed_joins ?? [],
+				blockedColumns: init.scope?.blocked_columns ?? [],
+			},
+			entityDetails,
+			rules: rulesResp.matched_rules ?? [],
+		});
 
 		const answer = await callLLM(systemPrompt, subQuestion, async (sql: string, reason: string) => {
 			return await harness.queryData(sql, reason);
 		});
 
-		await harness.writeFinding(sessionId, answer, 'high', init.scope?.tables ?? []);
+		await harness.writeFinding(sessionId, answer, 'high', tables);
 		return { agentId, answer };
 	});
 }

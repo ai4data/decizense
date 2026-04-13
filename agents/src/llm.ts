@@ -136,6 +136,11 @@ export async function callLLM(
 		{ role: 'user', content: question },
 	];
 
+	// Track the most recent governed-tool result so we can surface a
+	// meaningful fallback message when the LLM exits without text — avoids
+	// the downstream UI / orchestrator ever seeing a generic "No answer".
+	let lastToolResult: unknown = undefined;
+
 	for (let step = 0; step < maxSteps; step++) {
 		const response = await callAzureChat(messages, tools);
 		const choice = response.choices[0];
@@ -146,6 +151,7 @@ export async function callLLM(
 			for (const toolCall of msg.tool_calls) {
 				const args = JSON.parse(toolCall.function.arguments);
 				const result = await queryFn(args.sql, args.reason);
+				lastToolResult = result;
 				messages.push({
 					role: 'tool',
 					content: JSON.stringify(result),
@@ -162,5 +168,30 @@ export async function callLLM(
 		if (choice.finish_reason === 'stop') break;
 	}
 
+	return fallbackAnswerFromToolResult(lastToolResult);
+}
+
+/**
+ * When the LLM loop ends without a textual answer, derive a best-effort
+ * message from the last tool result so callers never see "No response".
+ * Callers include: runSubagentStep (then write_finding), the deep-agent
+ * orchestrator's task tool, and the single-agent CLI scripts.
+ */
+export function fallbackAnswerFromToolResult(result: unknown): string {
+	if (result && typeof result === 'object') {
+		const r = result as { status?: unknown; reason?: unknown; error?: unknown };
+		if (r.status === 'blocked' && typeof r.reason === 'string' && r.reason.trim()) {
+			return `Blocked by governance: ${r.reason}`;
+		}
+		// harness/src/tools/action.ts wraps query execution failures as
+		// { status: "error", reason: "Query execution failed: <msg>" } — surface
+		// that too so the sub-agent never collapses to "No answer generated".
+		if (r.status === 'error' && typeof r.reason === 'string' && r.reason.trim()) {
+			return `Tool error: ${r.reason}`;
+		}
+		if (typeof r.error === 'string' && r.error.trim()) {
+			return `Tool error: ${r.error}`;
+		}
+	}
 	return 'No answer generated within step limit.';
 }
