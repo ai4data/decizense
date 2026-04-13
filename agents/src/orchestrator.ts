@@ -25,9 +25,23 @@
  *   DAZENSE_LLM_MOCK=true WORKFLOW_ID=orch-test-1 npx tsx src/orchestrator.ts "..."
  */
 
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { initAgentTracing, shutdownAgentTracing, getAgentTracer } from './tracing.js';
 import { initAgentDbos, shutdownAgentDbos } from './workflows/dbos-init.js';
 import { startOrchestratorWorkflow } from './workflows/orchestrator.js';
+
+// Load repo-root .env so AZURE_OPENAI_* and other secrets are available to
+// child processes (apps/backend already does this; agents/ scripts must too).
+// Node 20.6+ ships process.loadEnvFile; we silently skip when the file isn't
+// present (e.g. in tests with explicit env injection).
+const repoEnvPath = resolve(process.cwd(), '.env');
+const fallbackEnvPath = resolve(process.cwd(), '..', '.env');
+const envPath = existsSync(repoEnvPath) ? repoEnvPath : existsSync(fallbackEnvPath) ? fallbackEnvPath : null;
+if (envPath && typeof (process as { loadEnvFile?: (p: string) => void }).loadEnvFile === 'function') {
+	(process as { loadEnvFile: (p: string) => void }).loadEnvFile(envPath);
+}
 
 const WORKFLOW_ID_PREFIX = 'orch-';
 

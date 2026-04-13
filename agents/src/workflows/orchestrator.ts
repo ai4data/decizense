@@ -25,9 +25,18 @@
  */
 
 import { DBOS } from '@dbos-inc/dbos-sdk';
+import { createOpenAI } from '@ai-sdk/openai';
+import { generateText, hasToolCall, type LanguageModel, type ModelMessage, stepCountIs } from 'ai';
+
 import { HarnessClient } from '../harness-client.js';
 import { callLLM } from '../llm.js';
 import { maybeCrashAfter } from './debug-crash.js';
+import { buildSystemPrompt } from './deep-agent/prompts.js';
+import { initialState, renderState, type DeepAgentState } from './deep-agent/state.js';
+import { ALLOWED_SUBAGENTS, createTaskTool, type AllowedSubagent } from './deep-agent/tools/task.js';
+import { createFinalizeTool } from './deep-agent/tools/finalize.js';
+import { createReadNotesTool, createWriteNoteTool } from './deep-agent/tools/scratchpad.js';
+import { createWriteTodosTool } from './deep-agent/tools/todos.js';
 
 export interface OrchestratorWorkflowInput {
 	workflowId: string;
@@ -127,15 +136,52 @@ ONLY query tables in your bundle. Be concise. Return a factual finding.`;
 	});
 }
 
+const MAX_TURNS = 12;
+
 /**
- * The workflow function. Non-step code (the function body outside DBOS.runStep
- * calls) runs on every replay — it must be deterministic. All I/O is wrapped
- * in runStep so results are checkpointed.
+ * Build the Vercel AI SDK LanguageModel for the orchestrator. We hit the
+ * existing Azure cognitiveservices deployment via createOpenAI's custom
+ * fetch escape hatch — `@ai-sdk/azure` assumes the new openai.azure.com
+ * URL shape which our deployment does not use.
+ */
+function buildOrchestratorModel(): LanguageModel {
+	const apiKey = process.env.AZURE_OPENAI_API_KEY;
+	const endpoint = (process.env.AZURE_OPENAI_ENDPOINT ?? '').replace(/\/+$/, '');
+	const deployment = process.env.AZURE_OPENAI_CHAT_DEPLOYMENT;
+	const apiVersion = process.env.AZURE_OPENAI_API_VERSION ?? '2024-10-01-preview';
+	if (!apiKey || !endpoint || !deployment) {
+		throw new Error(
+			'Set AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_CHAT_DEPLOYMENT for the orchestrator.',
+		);
+	}
+
+	const provider = createOpenAI({
+		apiKey,
+		baseURL: 'https://unused.invalid', // overridden by the fetch below
+		fetch: (async (_url: unknown, init?: RequestInit) => {
+			const azureUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+			const headers = new Headers(init?.headers);
+			headers.delete('authorization');
+			headers.set('api-key', apiKey);
+			return fetch(azureUrl, { ...init, headers });
+		}) as unknown as typeof fetch,
+	});
+	// .chat() targets /chat/completions; the default provider() uses the
+	// /responses endpoint which our cognitiveservices URL doesn't expose.
+	return provider.chat(deployment) as unknown as LanguageModel;
+}
+
+/**
+ * Deep-agent workflow function. Replays the deterministic loop body each
+ * time DBOS recovers from a crash; only the LLM/tool calls inside DBOS.runStep
+ * are checkpointed and skipped on replay.
  */
 async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise<OrchestratorWorkflowResult> {
 	const { workflowId, sessionId, question } = input;
+	const state: DeepAgentState = initialState();
 
-	// Step 1: get context from the harness
+	// One-shot harness context fetch — surfaces relevant tables and glossary
+	// terms; pre-seeded into the scratchpad so the LLM sees it from turn 0.
 	const context = await DBOS.runStep(
 		async () => {
 			return withHarnessClient('orchestrator', async (harness) => {
@@ -146,120 +192,117 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 	);
 	maybeCrashAfter('get_context');
 
-	const glossaryTerms =
-		(context as { matched_glossary_terms?: Array<{ name: string; description: string }> }).matched_glossary_terms ??
-		[];
+	const ctx = context as {
+		relevant_tables?: Array<{ name: string }>;
+		matched_glossary_terms?: Array<{ name: string; description: string }>;
+	};
+	const relevantTables = (ctx.relevant_tables ?? []).map((t) => t.name).join(', ') || '(none)';
+	const relevantTerms =
+		(ctx.matched_glossary_terms ?? []).map((t) => `${t.name}: ${t.description}`).join('; ') || '(none)';
+	state.notes['catalog_context'] = `Relevant tables: ${relevantTables}\nGlossary terms: ${relevantTerms}`;
 
-	// Step 2: plan which sub-agents to involve via the LLM
-	const plan = await DBOS.runStep(
-		async () => {
-			return withHarnessClient('orchestrator', async (harness) => {
-				const orchestratorInit = (await harness.initializeAgent(sessionId, question)) as {
-					constraints?: { can_delegate_to?: string[] };
-				};
-				const delegateTo = orchestratorInit.constraints?.can_delegate_to ?? [];
-				const agentDescriptions = delegateTo.map((id) => `- ${id}`).join('\n');
+	// Build the deep-agent tools. Closures over `state` so each tool call
+	// mutates the workflow state in place; that state is what gets snapshotted
+	// at each turn boundary.
+	const model = buildOrchestratorModel();
+	const systemPrompt = buildSystemPrompt(`Catalog context for this run:\n${state.notes['catalog_context']}`);
 
-				const planPrompt = `You are an orchestrator that decomposes complex questions.
-Given a question, decide which domain agents to involve and what each should investigate.
-
-Available agents:
-${agentDescriptions}
-
-Question: "${question}"
-
-Respond ONLY with a JSON object like:
-{"agents": [{"id": "agent_id_here", "sub_question": "..."}, ...]}
-
-Include only agents that are needed. Be specific in sub-questions.`;
-
-				const planResponse = await callLLM(planPrompt, 'Plan the investigation', async () => ({}));
-				let parsedPlan: SubagentPlan[];
-				try {
-					const jsonMatch = planResponse.match(/\{[\s\S]*\}/);
-					const parsed = JSON.parse(jsonMatch?.[0] ?? '{"agents": []}');
-					parsedPlan = parsed.agents ?? [];
-				} catch {
-					parsedPlan = [
-						{ id: 'flight_ops', sub_question: question },
-						{ id: 'booking', sub_question: question },
-					];
-				}
-				return parsedPlan;
-			});
-		},
-		{ name: 'plan_subagents' },
-	);
-	maybeCrashAfter('plan_subagents');
-
-	// Step 3: run sub-agents in parallel. Each sub-agent is its own step so
-	// step-level checkpointing + retries apply per sub-agent.
-	const subagentResults = await Promise.all(
-		plan.map((agent) =>
-			DBOS.runStep(async () => runSubagentStep(agent.id, agent.sub_question, sessionId), {
-				name: `run_subagent_${agent.id}`,
-			}).then((res) => {
-				maybeCrashAfter(`run_subagent_${agent.id}`);
-				return res;
-			}),
-		),
-	);
-
-	// Step 4: combine findings into a final decision via LLM
-	const decision = await DBOS.runStep(
-		async () => {
-			const combinePrompt = `You are an orchestrator combining findings from multiple agents into a final decision.
-
-Original question: "${question}"
-
-Agent findings:
-${subagentResults.map((r) => `[${r.agentId}]: ${r.answer}`).join('\n\n')}
-
-${
-	glossaryTerms.length > 0
-		? `Relevant business terms: ${glossaryTerms.map((t) => `${t.name}: ${t.description}`).join('; ')}`
-		: ''
-}
-
-Provide a clear, actionable decision. Include:
-1. Direct answer to the question
-2. Key facts from each agent
-3. Confidence level (high/medium/low) and why
-4. Recommended next action if any`;
-
-			return callLLM(combinePrompt, 'Combine findings into a decision', async () => ({}));
-		},
-		{ name: 'combine_findings' },
-	);
-	maybeCrashAfter('combine_findings');
-
-	// Step 5: record the outcome via the harness. The harness tool writes to
-	// decision_outcomes; the workflow_id we pass correlates this outcome back
-	// to the DBOS workflow and is indexed under Phase 1b's partial unique key.
-	const outcomeStored = await DBOS.runStep(
-		async () => {
-			return withHarnessClient('orchestrator', async (harness) => {
-				await harness.callTool('record_outcome', {
-					session_id: sessionId,
-					question,
-					decision_summary: decision.substring(0, 500),
-					reasoning: `Combined findings from ${subagentResults
-						.map((r) => r.agentId)
-						.join(', ')}. ${glossaryTerms.length} glossary terms matched.`,
-					confidence: 'high',
-					agents_involved: subagentResults.map((r) => r.agentId),
-					cost_usd: 0.15,
-					evidence_rules: [],
-					evidence_signal_types: [],
+	const tools = {
+		write_todos: createWriteTodosTool(state),
+		write_note: createWriteNoteTool(state),
+		read_notes: createReadNotesTool(state),
+		task: createTaskTool({
+			state,
+			sessionId,
+			runner: async (subagentType, description, sid) => {
+				return runSubagentStep(subagentType, description, sid);
+			},
+		}),
+		finalize: createFinalizeTool({
+			state,
+			recordOutcome: async ({ decision, confidence, evidence }) => {
+				await withHarnessClient('orchestrator', async (harness) => {
+					await harness.callTool('record_outcome', {
+						session_id: sessionId,
+						question,
+						decision_summary: decision.substring(0, 500),
+						reasoning: `Deep-agent loop, ${state.taskResults.length} sub-agent task(s), ${state.turn + 1} turn(s). Evidence: ${evidence.join(' | ')}`,
+						confidence,
+						agents_involved: Array.from(new Set(state.taskResults.map((r) => r.subagentType))),
+						cost_usd: 0.15,
+						evidence_rules: [],
+						evidence_signal_types: [],
+					});
 				});
-				return true;
-			});
-		},
-		{ name: 'record_outcome' },
-	);
-	maybeCrashAfter('record_outcome');
+			},
+		}),
+	};
 
-	return { workflowId, sessionId, question, plan, subagentResults, decision, outcomeStored };
+	// Multi-turn loop. Each turn = one LLM call (one tool invocation), wrapped
+	// in DBOS.runStep so it checkpoints. The loop itself is deterministic;
+	// crash recovery replays the loop body and DBOS short-circuits already-
+	// completed turn_N steps from the durable log.
+	const transcript: ModelMessage[] = [];
+	while (!state.finalized && state.turn < MAX_TURNS) {
+		const turnIndex = state.turn;
+		await DBOS.runStep(
+			async () => {
+				const messages: ModelMessage[] = [
+					{ role: 'system', content: systemPrompt },
+					{ role: 'user', content: `Question: ${question}` },
+					{ role: 'system', content: renderState(state) },
+					...transcript,
+				];
+
+				const result = await generateText({
+					model,
+					messages,
+					tools,
+					stopWhen: [hasToolCall('finalize'), stepCountIs(1)],
+				});
+
+				transcript.push(...result.response.messages);
+				return { tools_called: result.toolCalls.map((c) => c.toolName), text: result.text };
+			},
+			{ name: `turn_${turnIndex}` },
+		);
+		maybeCrashAfter(`turn_${turnIndex}`);
+		state.turn += 1;
+	}
+
+	if (!state.finalized) {
+		// Loop exhausted without finalize — synthesise a low-confidence summary
+		// from whatever we collected so the workflow still records an outcome.
+		const fallbackDecision =
+			state.taskResults.length > 0
+				? state.taskResults.map((r) => `[${r.subagentType}] ${r.answer}`).join('\n\n')
+				: 'No sub-agent results were collected before the turn limit was reached.';
+		await withHarnessClient('orchestrator', async (harness) => {
+			await harness.callTool('record_outcome', {
+				session_id: sessionId,
+				question,
+				decision_summary: fallbackDecision.substring(0, 500),
+				reasoning: `Deep-agent loop exhausted ${MAX_TURNS} turns without calling finalize.`,
+				confidence: 'low',
+				agents_involved: Array.from(new Set(state.taskResults.map((r) => r.subagentType))),
+				cost_usd: 0.15,
+				evidence_rules: [],
+				evidence_signal_types: [],
+			});
+		});
+		state.final = { decision: fallbackDecision, confidence: 'low', evidence: [] };
+	}
+
+	const decisionText = state.final?.decision ?? '';
+	return {
+		workflowId,
+		sessionId,
+		question,
+		plan: state.taskResults.map((r) => ({ id: r.subagentType, sub_question: r.description })),
+		subagentResults: state.taskResults.map((r) => ({ agentId: r.subagentType, answer: r.answer })),
+		decision: decisionText,
+		outcomeStored: true,
+	};
 }
 
 export const orchestratorWorkflow = DBOS.registerWorkflow(orchestratorWorkflowFn, {
