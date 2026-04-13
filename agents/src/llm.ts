@@ -177,11 +177,17 @@ export async function callLLM(
  * Callers include: runSubagentStep (then write_finding), the deep-agent
  * orchestrator's task tool, and the single-agent CLI scripts.
  */
-function fallbackAnswerFromToolResult(result: unknown): string {
+export function fallbackAnswerFromToolResult(result: unknown): string {
 	if (result && typeof result === 'object') {
 		const r = result as { status?: unknown; reason?: unknown; error?: unknown };
 		if (r.status === 'blocked' && typeof r.reason === 'string' && r.reason.trim()) {
 			return `Blocked by governance: ${r.reason}`;
+		}
+		// harness/src/tools/action.ts wraps query execution failures as
+		// { status: "error", reason: "Query execution failed: <msg>" } — surface
+		// that too so the sub-agent never collapses to "No answer generated".
+		if (r.status === 'error' && typeof r.reason === 'string' && r.reason.trim()) {
+			return `Tool error: ${r.reason}`;
 		}
 		if (typeof r.error === 'string' && r.error.trim()) {
 			return `Tool error: ${r.error}`;

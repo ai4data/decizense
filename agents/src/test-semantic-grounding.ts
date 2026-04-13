@@ -29,6 +29,7 @@
  */
 
 import type { EntityDetails } from './harness-client.js';
+import { fallbackAnswerFromToolResult } from './llm.js';
 import { buildSubagentSystemPrompt } from './workflows/deep-agent/sub-agent-prompt.js';
 
 interface Assertion {
@@ -165,6 +166,44 @@ for (const [label, prompt] of [
 	// Regression for the exact hallucinated column we saw in orch-deep-2
 	assertAbsent(prompt, 'created_at timestamp', `${label}: does not advertise a fake created_at column`);
 }
+
+// ── Assertions: callLLM step-limit fallback covers harness result shapes ──
+
+function assertEquals(actual: string, expected: string, label: string): void {
+	results.push({
+		ok: actual === expected,
+		label,
+		detail: actual === expected ? undefined : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+	});
+}
+
+// harness/src/tools/action.ts returns blocked tool calls as this shape
+assertEquals(
+	fallbackAnswerFromToolResult({ status: 'blocked', reason: 'Table customers is not in bundle flights-ops' }),
+	'Blocked by governance: Table customers is not in bundle flights-ops',
+	'fallback surfaces blocked reason',
+);
+
+// harness/src/tools/action.ts wraps execution failures as { status: "error", reason: "..." }
+assertEquals(
+	fallbackAnswerFromToolResult({ status: 'error', reason: 'Query execution failed: syntax error at or near ","' }),
+	'Tool error: Query execution failed: syntax error at or near ","',
+	'fallback surfaces status=error with reason (reviewer follow-up)',
+);
+
+// legacy {error: "..."} shape (other harness tools occasionally emit this)
+assertEquals(
+	fallbackAnswerFromToolResult({ error: 'catalog unreachable' }),
+	'Tool error: catalog unreachable',
+	'fallback surfaces bare error field',
+);
+
+// nothing usable → generic message (not "No response")
+assertEquals(
+	fallbackAnswerFromToolResult(undefined),
+	'No answer generated within step limit.',
+	'fallback still has a sane default when no tool result exists',
+);
 
 // ── Report ─────────────────────────────────────────────────────────────────
 
