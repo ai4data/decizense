@@ -373,9 +373,9 @@ Expected (deep-agent loop):
 1. **Plan** — the orchestrator calls `write_todos` once with 3–6 sub-questions
    that each name an entity, a metric, and a time window.
 2. **Task spawns** — one `task(subagent_type, description)` call per turn,
-   reusing existing flight*ops / booking / customer_service identities. Each
-   spawn shows up in stdout as `[<agent>] <answer>` and as a DBOS step
-   `task*<N>\_<agent>`in`dbos.operation_outputs`.
+   reusing existing `flight_ops` / `booking` / `customer_service` identities.
+   Each spawn shows up in stdout as `[<agent>] <answer>` and as a DBOS step
+   `task_<N>_<agent>` in `dbos.operation_outputs`.
 3. **(Optional) write_note** — interim facts persisted in the workflow's
    scratchpad so they survive crash-recovery without re-querying.
 4. **Finalize** — `finalize({decision, confidence, evidence})` records an
