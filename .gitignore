@@ -21,3 +21,6 @@ nul.venv-om/
 .catalog-token
 .omd-bot-token
 .venv-om/
+
+# Local dev/test logs — never tracked
+*.log
