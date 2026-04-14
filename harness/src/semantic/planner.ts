@@ -111,10 +111,16 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 		for (let i = 1; i < planned.length; i++) {
 			const other = planned[i];
 			const edge = registry.getJoin(primary.name, other.name);
-			if (!edge) {
+			if (!edge || !joinIsInBundleScope(edge, scope.bundleJoins)) {
 				throw new SemanticError(
 					'disallowed_join',
 					`No allowed join between "${primary.name}" and "${other.name}" in bundle "${scope.bundleId}".`,
+					{
+						bundle: scope.bundleId,
+						declared_in_bundle: (scope.bundleJoins ?? []).map(
+							(j) => `${j.left.table}.${j.left.column} = ${j.right.table}.${j.right.column}`,
+						),
+					},
 				);
 			}
 			// Cardinality detection — conservative. Without column statistics
@@ -383,6 +389,25 @@ function clampLimit(n?: number): number {
 		throw new SemanticError('invalid_value', `limit must be a positive integer (got ${n}).`);
 	}
 	return Math.min(n, MAX_LIMIT);
+}
+
+/**
+ * Confirm the registry-provided edge is also explicitly declared in
+ * the agent's bundle. Comparison is on (table, column) pairs and is
+ * direction-agnostic.
+ */
+function joinIsInBundleScope(
+	edge: ReturnType<SemanticRegistry['getJoin']>,
+	bundleJoins: AgentScope['bundleJoins'],
+): boolean {
+	if (!edge || !bundleJoins) return false;
+	const leftKey = `${edge.source.left.table}.${edge.source.left.column}`;
+	const rightKey = `${edge.source.right.table}.${edge.source.right.column}`;
+	return bundleJoins.some((j) => {
+		const a = `${j.left.table}.${j.left.column}`;
+		const b = `${j.right.table}.${j.right.column}`;
+		return (a === leftKey && b === rightKey) || (a === rightKey && b === leftKey);
+	});
 }
 
 export function timeGrainToSqlUnit(grain: TimeGrain): string {

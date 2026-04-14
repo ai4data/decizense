@@ -15,12 +15,25 @@ models:
     - name: orders
       table: { schema: public, table: orders }
       description: Orders for widgets.
+      time_dimension: created_at
       dimensions:
           - name: status
             column: status
             description: Order status.
+          - name: created_at
+            column: created_at
+            type: time
+            description: When the order was placed.
       measures:
           - name: total_orders
             column: order_id
             aggregation: count
             description: Total order count.
+          - name: paid_orders
+            column: order_id
+            aggregation: count
+            filters:
+                - column: status
+                  operator: '='
+                  value: paid
+            description: Orders that successfully completed payment.
