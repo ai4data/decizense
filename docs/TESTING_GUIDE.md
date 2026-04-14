@@ -12,27 +12,28 @@ For the full Plan v3 end-to-end validation runbook (including UI and umbrella ve
 
 Each test below carries a `**Tests:**` line naming the harness capabilities it exercises. The vocabulary:
 
-| Label                              | What the harness is doing                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **Identity & Auth**                | resolving the agent's identity (config-only / JWT / introspection), scope, and tools-available |
-| **Bundle scoping**                 | enforcing that a query only touches tables in the agent's `bundle`                             |
-| **PII policy**                     | rejecting queries that read `blocked_columns` (first_name, email, ...)                         |
-| **Business rules**                 | fetching `get_business_rules` and shaping behaviour by `severity`                              |
-| **OPA policy**                     | a per-call OPA decision (allow / deny / require_approval)                                      |
-| **Catalog (OMD)**                  | reading entity metadata, tags, owners, freshness from OpenMetadata                             |
-| **Glossary**                       | resolving business terms via `search_glossary` (synonyms, descriptions)                        |
-| **Lineage**                        | upstream / downstream graph via `get_lineage`                                                  |
-| **Semantic model**                 | measures, dimensions, allowed_joins, time-filter requirements                                  |
-| **Process signals**                | Layer-3 event distributions, delay patterns, case timelines                                    |
-| **Decision lifecycle**             | `propose_decision` → `approve_decision` → `execute_decision_action`                            |
-| **Permissions**                    | per-agent `can_propose` / `can_approve` / `can_execute` matrix                                 |
-| **Risk classification**            | the harness assigning low / medium / high / critical to a proposed action                      |
-| **Multi-agent orchestration**      | the orchestrator decomposing a question and delegating to domain agents                        |
-| **Workflow durability**            | DBOS-checkpointed steps that survive crashes (Plan v3 R2.1)                                    |
-| **Memory & precedent**             | `save_memory`, `recall_memory`, `search_precedent`                                             |
-| **Admin / Observability**          | governance gaps, impact analysis, drift, replay, audit                                         |
-| **Knowledge graph (RDF / SPARQL)** | SKOS concepts in Fuseki, queryable from outside the harness                                    |
-| **Tracing**                        | OpenTelemetry spans (`dazense.tool.*`) for every tool call                                     |
+| Label                              | What the harness is doing                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Identity & Auth**                | resolving the agent's identity (config-only / JWT / introspection), scope, and tools-available                                                                                                                                                                                                                                             |
+| **Bundle scoping**                 | enforcing that a query only touches tables in the agent's `bundle`                                                                                                                                                                                                                                                                         |
+| **PII policy**                     | rejecting queries that read `blocked_columns` (first_name, email, ...)                                                                                                                                                                                                                                                                     |
+| **Business rules**                 | fetching `get_business_rules` and shaping behaviour by `severity`                                                                                                                                                                                                                                                                          |
+| **OPA policy**                     | a per-call OPA decision (allow / deny / require_approval)                                                                                                                                                                                                                                                                                  |
+| **Catalog (OMD)**                  | reading entity metadata, tags, owners, freshness from OpenMetadata                                                                                                                                                                                                                                                                         |
+| **Glossary**                       | resolving business terms via `search_glossary` (synonyms, descriptions)                                                                                                                                                                                                                                                                    |
+| **Lineage**                        | upstream / downstream graph via `get_lineage`                                                                                                                                                                                                                                                                                              |
+| **Semantic model**                 | measures, dimensions, allowed_joins, time-filter requirements                                                                                                                                                                                                                                                                              |
+| **Semantic execution**             | `query_metrics` — the harness compiles {measures, dimensions, filters, time_range, time_grain, order_by, limit} into parameterised SQL, runs governance, returns rows + the generated SQL + the resolved refs. See [SCENARIO_CONFIG.md](./SCENARIO_CONFIG.md#semanticssemantic_modelyml-and-the-query_metrics-tool) for the full contract. |
+| **Process signals**                | Layer-3 event distributions, delay patterns, case timelines                                                                                                                                                                                                                                                                                |
+| **Decision lifecycle**             | `propose_decision` → `approve_decision` → `execute_decision_action`                                                                                                                                                                                                                                                                        |
+| **Permissions**                    | per-agent `can_propose` / `can_approve` / `can_execute` matrix                                                                                                                                                                                                                                                                             |
+| **Risk classification**            | the harness assigning low / medium / high / critical to a proposed action                                                                                                                                                                                                                                                                  |
+| **Multi-agent orchestration**      | the orchestrator decomposing a question and delegating to domain agents                                                                                                                                                                                                                                                                    |
+| **Workflow durability**            | DBOS-checkpointed steps that survive crashes (Plan v3 R2.1)                                                                                                                                                                                                                                                                                |
+| **Memory & precedent**             | `save_memory`, `recall_memory`, `search_precedent`                                                                                                                                                                                                                                                                                         |
+| **Admin / Observability**          | governance gaps, impact analysis, drift, replay, audit                                                                                                                                                                                                                                                                                     |
+| **Knowledge graph (RDF / SPARQL)** | SKOS concepts in Fuseki, queryable from outside the harness                                                                                                                                                                                                                                                                                |
+| **Tracing**                        | OpenTelemetry spans (`dazense.tool.*`) for every tool call                                                                                                                                                                                                                                                                                 |
 
 ## Quick smoke test
 
@@ -201,7 +202,7 @@ Tests:
 - Business rules: 5 matched for flights
 ```
 
-When run via `bash scripts/smoke-test.sh`, a second deterministic block follows:
+When run via `bash scripts/smoke-test.sh`, three more deterministic blocks follow:
 
 ```
 Semantic-grounding plumbing test
@@ -211,10 +212,33 @@ Semantic-grounding plumbing test
 ✅ All 28 assertions passed
 ```
 
-This second test exercises the Tier 1 plumbing — the pure builder that
-forwards the harness's authoritative columns / measures / dimensions /
-allowed_joins / rule guidance into every sub-agent's system prompt. It
-runs with no LLM and no harness calls, so it's deterministic and CI-safe.
+```
+Scenario-neutrality test
+  ✓ travel scenario loads
+  ✓ minimal (non-travel) scenario loads
+  ... (signal dispatch / event schema / rule evaluator / PII policy
+       proven generic against a non-travel widgets+orders fixture)
+✅ All 47 assertions passed
+```
+
+```
+Semantic compiler regression
+  ✓ registry resolves the flights model
+  ✓ golden SQL: airline × delayed + total, March 2026
+  ✓ time_grain=week → date_trunc($N::text, ...) (R6: bound, not interpolated)
+  ✓ flight_ops cannot query bookings model (out_of_bundle)
+  ✓ cross-model non-distinct aggregation across one_to_many → fanout_refused
+  ... (registry resolution, planner validation, golden SQL,
+       policy refusals, ambiguity regressions, fanout, max_days)
+✅ All 48 assertions passed
+```
+
+The four blocks together cover, in order: **end-to-end governed query**
+(test-query), **prompt-plumbing** (semantic-grounding), **scenario
+neutrality** (scenario-neutral), and **semantic compiler purity**
+(semantic-compiler — the engine behind `query_metrics`). All run with
+no LLM and the last three with no DB, so they're deterministic and
+CI-safe.
 
 ---
 
@@ -447,6 +471,121 @@ Ask:
 ```
 
 Expected: Agent calls `harness__get_entity_details` → returns columns, Tier1 tag, glossary links (FlightDelay, CheckInWindow, OverbookingRate).
+
+---
+
+## Part 5b: Semantic Metric Execution (`query_metrics`)
+
+**Tests:** Semantic execution · Semantic model · OPA policy · PII policy · Bundle scoping
+
+The harness compiles a measure-shaped request into parameterised
+PostgreSQL, runs governance, returns rows + the `generated_sql` + the
+`resolved_measures` / `resolved_dimensions` / `applied_time_window`.
+This is the engine the orchestrator's sub-agents prefer over `query_data`
+when a question maps onto declared measures and dimensions.
+
+The contract is documented in
+[SCENARIO_CONFIG.md → semantic_model.yml + query_metrics](./SCENARIO_CONFIG.md#semanticssemantic_modelyml-and-the-query_metrics-tool).
+
+### Direct CLI exercise (no LLM)
+
+The following PowerShell sequence opens an MCP session and calls
+`query_metrics` directly. Useful when you want to confirm the engine
+itself works without LLM choice noise.
+
+```powershell
+# Initialise a session
+$body0 = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0.1"}}}'
+$resp = Invoke-WebRequest -Method Post -Uri http://127.0.0.1:9080/mcp `
+    -ContentType 'application/json' `
+    -Headers @{Accept='application/json, text/event-stream'; 'X-Agent-Id'='flight_ops'} `
+    -Body $body0
+$sid = $resp.Headers['Mcp-Session-Id']
+Invoke-WebRequest -Method Post -Uri http://127.0.0.1:9080/mcp `
+    -ContentType 'application/json' `
+    -Headers @{Accept='application/json, text/event-stream'; 'X-Agent-Id'='flight_ops'; 'Mcp-Session-Id'=$sid} `
+    -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}' | Out-Null
+
+# Compute delayed + total flights per airline for March 2026
+$body = @'
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_metrics","arguments":{"measures":["flights.delayed_flights","flights.total_flights"],"dimensions":["flights.airline"],"time_range":{"start":"2026-03-01","end":"2026-04-01"},"order_by":[{"field":"delayed_flights","direction":"desc"}],"limit":10}}}
+'@
+Invoke-WebRequest -Method Post -Uri http://127.0.0.1:9080/mcp `
+    -ContentType 'application/json' `
+    -Headers @{Accept='application/json, text/event-stream'; 'X-Agent-Id'='flight_ops'; 'Mcp-Session-Id'=$sid} `
+    -Body $body | Select-Object -ExpandProperty Content
+```
+
+Expected response (abridged):
+
+```jsonc
+{
+	"status": "ok",
+	"rows": [
+		{ "airline": "NF", "delayed_flights": "7", "total_flights": "99" },
+		{ "airline": "AT", "delayed_flights": "7", "total_flights": "91" },
+		{ "airline": "EA", "delayed_flights": "4", "total_flights": "85" },
+		{ "airline": "SJ", "delayed_flights": "4", "total_flights": "82" },
+		{ "airline": "SP", "delayed_flights": "3", "total_flights": "82" },
+	],
+	"row_count": 5,
+	"generated_sql": "SELECT \"flights\".\"airline_code\" AS \"airline\", COUNT(flights.flight_id) FILTER (WHERE flights.status = $1) AS \"delayed_flights\", COUNT(flights.flight_id) AS \"total_flights\"\nFROM \"public\".\"flights\" AS \"flights\"\nWHERE \"flights\".\"scheduled_departure\" >= $2 AND \"flights\".\"scheduled_departure\" < $3\nGROUP BY 1\nORDER BY \"delayed_flights\" DESC\nLIMIT $4",
+	"resolved_measures": [
+		{
+			"ref": "flights.delayed_flights",
+			"expression": "COUNT(flights.flight_id) FILTER (WHERE flights.status = $1)",
+		},
+		{ "ref": "flights.total_flights", "expression": "COUNT(flights.flight_id)" },
+	],
+	"resolved_dimensions": [{ "ref": "flights.airline", "column": "flights.airline_code" }],
+	"applied_time_window": { "column": "flights.scheduled_departure", "start": "2026-03-01", "end": "2026-04-01" },
+	"governance": { "policy_version": "<sha>" },
+}
+```
+
+Things to confirm in the response:
+
+- Every value (the `'delayed'` literal, the date bounds, the LIMIT
+  integer) is a `$N` placeholder — no values inlined into the SQL text.
+- `generated_sql` matches the request: GROUP BY 1 because of the airline
+  dimension, FILTER WHERE for the snapshot-style measure.
+- `resolved_*` blocks let the caller see what was computed without
+  parsing the SQL.
+
+### Negative tests
+
+| Request                                                                                                                                                           | Expected response                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `{"measures":["flights.no_such"],"time_range":{"start":"2026-03-01","end":"2026-04-01"}}`                                                                         | `status:"error"`, `code:"unknown_measure"`, `details.suggestion` (Levenshtein hint), `details.available` list       |
+| `{"measures":["bookings.total_bookings"]}`                                                                                                                        | `status:"error"`, `code:"out_of_bundle"` (flight_ops can't reach bookings), `details.allowed_tables`                |
+| `{"measures":["flights.total_flights"],"time_range":{"start":"2024-01-01","end":"2026-01-01"}}`                                                                   | `status:"error"`, `code:"time_filter_required"`, `details.actual_days:731`, `details.max_days:90` (window too wide) |
+| `{"measures":["delays.total_delays"],"dimensions":["flights.airline"],"time_range":{"start":"2026-03-01","end":"2026-04-01"}}` (cross-model with no allowed_join) | `status:"error"`, `code:"disallowed_join"`, `details.declared_in_bundle` echoes the bundle's actual joins           |
+
+### Ambiguity-as-feature
+
+The travel scenario deliberately exposes two distinct "delayed" measures:
+
+- `flights.delayed_flights` — snapshot, `COUNT(flight_id) FILTER (WHERE status='delayed')`.
+- `delays.total_delays` — event-log row count from `public.flight_delays`.
+
+They live on different models with different tables. There is no
+"correct" delayed metric — there are two, and the caller must pick.
+The compiler refuses bare `delayed_flights` references with
+`ambiguous_ref` even when only one model defines it; refs must be
+fully qualified. This is a structural guarantee, not a convention.
+
+### Inside the orchestrator
+
+The deep-agent sub-agents are wired with `query_metrics` as a tool
+alongside `query_data`. The sub-agent prompt instructs them to prefer
+`query_metrics` for measure-shaped questions because the harness
+compiles, governs, and returns the SQL — so business-rule logic baked
+into a measure (e.g. `delayed_flights` already filters
+`status='delayed'`) is applied without re-derivation by the LLM.
+
+In practice the LLM still sometimes chooses `query_data` out of habit;
+that's a prompt-engineering follow-up, not a wiring issue (the unit
+suite + the direct curl above prove the engine path).
 
 ---
 
