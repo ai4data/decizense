@@ -368,6 +368,24 @@ expectError(
 	'missing time_range on a time-required bundle → time_filter_required',
 );
 
+// 11c. Time-filter requirement: a window WIDER than max_days must fail.
+// Reviewer R5 finding: previously the planner only checked filter
+// presence, not the window width. Two-year window over a 90-day-max
+// bundle must surface as time_filter_required with actual_days echoed.
+expectError(
+	() =>
+		plan(
+			{
+				measures: ['flights.total_flights'],
+				time_range: { start: '2024-01-01', end: '2026-01-01' }, // 731 days
+			},
+			travelRegistry,
+			flightOpsScope,
+		),
+	'time_filter_required',
+	'time window wider than max_days → time_filter_required (max_days enforced)',
+);
+
 // ── Report ─────────────────────────────────────────────────────────────────
 
 console.log('Semantic compiler regression\n');

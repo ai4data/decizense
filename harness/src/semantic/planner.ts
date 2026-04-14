@@ -238,12 +238,53 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 		const planForReqTable = planned.find((p) => p.table === req.table);
 		if (!planForReqTable) continue;
 		const col = `${planForReqTable.alias}.${req.column}`;
-		const present = whereFilters.some((w) => w.column === col);
-		if (!present) {
+		const onCol = whereFilters.filter((w) => w.column === col);
+		if (onCol.length === 0) {
 			throw new SemanticError(
 				'time_filter_required',
 				`Bundle "${scope.bundleId}" requires a time filter on ${col} (max ${req.max_days} days).`,
 				{ table: req.table, column: req.column, max_days: req.max_days, model_alias: planForReqTable.alias },
+			);
+		}
+		// Enforce max_days. Look for a lower bound (>= or >) and an upper
+		// bound (< or <=). If either side is missing or the values don't
+		// parse as dates, refuse — the requirement is "the query must be
+		// bounded to ≤ max_days", which we can only verify when both ends
+		// are present and parseable.
+		const lower = onCol.find((w) => w.operator === '>=' || w.operator === '>');
+		const upper = onCol.find((w) => w.operator === '<' || w.operator === '<=');
+		if (!lower || !upper) {
+			throw new SemanticError(
+				'time_filter_required',
+				`Bundle "${scope.bundleId}" requires a bounded time window on ${col} (max ${req.max_days} days). Supply both a lower (>= or >) and an upper (< or <=) bound.`,
+				{ table: req.table, column: req.column, max_days: req.max_days, model_alias: planForReqTable.alias },
+			);
+		}
+		const startVal = params[lower.paramIndices[0] - 1];
+		const endVal = params[upper.paramIndices[0] - 1];
+		const startMs = parseToMs(startVal);
+		const endMs = parseToMs(endVal);
+		if (startMs === null || endMs === null) {
+			throw new SemanticError(
+				'time_filter_required',
+				`Bundle "${scope.bundleId}" requires a parseable time window on ${col} (got start=${String(startVal)}, end=${String(endVal)}).`,
+				{ table: req.table, column: req.column, max_days: req.max_days, model_alias: planForReqTable.alias },
+			);
+		}
+		const widthDays = Math.ceil((endMs - startMs) / 86_400_000);
+		if (widthDays > req.max_days) {
+			throw new SemanticError(
+				'time_filter_required',
+				`Time window on ${col} is ${widthDays} days; bundle "${scope.bundleId}" allows at most ${req.max_days}.`,
+				{
+					table: req.table,
+					column: req.column,
+					max_days: req.max_days,
+					actual_days: widthDays,
+					start: String(startVal),
+					end: String(endVal),
+					model_alias: planForReqTable.alias,
+				},
 			);
 		}
 	}
@@ -421,6 +462,23 @@ function joinIsInBundleScope(
 		const b = `${j.right.table}.${j.right.column}`;
 		return (a === leftKey && b === rightKey) || (a === rightKey && b === leftKey);
 	});
+}
+
+/**
+ * Parse a stored param value into epoch ms, or null if it doesn't
+ * look like a date. Accepts ISO strings (the only shape time_range
+ * values are stored in today) and Date instances.
+ */
+function parseToMs(v: unknown): number | null {
+	if (v instanceof Date) {
+		const t = v.getTime();
+		return Number.isFinite(t) ? t : null;
+	}
+	if (typeof v === 'string') {
+		const t = Date.parse(v);
+		return Number.isFinite(t) ? t : null;
+	}
+	return null;
 }
 
 export function timeGrainToSqlUnit(grain: TimeGrain): string {
