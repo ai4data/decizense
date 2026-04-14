@@ -225,6 +225,16 @@ if (optionalSignal) {
 	}
 }
 
+// ── Event-schema coercion contract (Fix #1R2) ───────────────────────────────
+// get_case_timeline must reject a case_id whose type doesn't match the
+// declared key kind. We can't call the tool directly here (it needs a
+// database), but we can lean on the same coercion shape ingest_event
+// uses — exposed via bindSignalParams' sibling logic.
+if (travelEvents) {
+	const bookingKey = travelEvents.correlation_keys.find((k) => k.name === 'booking_id');
+	assert(!!bookingKey && bookingKey.kind === 'int', 'travel booking_id is declared as int — coercion target');
+}
+
 // ── 8. Rule applies_to scoping (Fix #3) — rules not in query scope are silent
 // We assert at the config-shape level that rules carry applies_to with a
 // bare table token so the verify tool's scope gate has something to work

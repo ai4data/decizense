@@ -2,12 +2,16 @@
  * LAYER 3: OPERATIONAL/EVENT tools
  *
  * The event log is the append-only source of truth for what happened.
- * Each booking is a process instance (case_id = booking_id).
+ * Which column identifies a "case" (the process instance) is scenario-
+ * defined — see <scenario>/semantics/events.yml > correlation_keys.
+ * For the travel scenario the case key is booking_id; for a finance
+ * scenario it might be transaction_id; for healthcare, encounter_id.
+ * The harness stays neutral.
  *
  * These tools provide:
- * - Event ingestion (append new events)
- * - Case timelines (full lifecycle of a booking)
- * - Process signals (bottlenecks, patterns, anomalies)
+ * - Event ingestion (append new events with scenario-declared keys)
+ * - Case timelines (chronological event stream for one case_id)
+ * - Process signals (bottlenecks, patterns, anomalies — scenario SQL)
  *
  * Process signals feed Layer 4 (Decision) as evidence for proposals.
  */
@@ -217,10 +221,12 @@ export function registerEventTools(server: McpServer) {
 	);
 
 	/**
-	 * get_case_timeline — Full lifecycle of a booking (process instance).
+	 * get_case_timeline — Full lifecycle of a single case.
 	 *
-	 * Returns all events for a booking_id in chronological order.
-	 * Each booking is a process instance for process mining.
+	 * Returns every event sharing the given correlation-key value, in
+	 * chronological order. The caller chooses which declared key to
+	 * treat as the case identifier (e.g. booking_id for travel,
+	 * transaction_id for finance). Scenario-neutral.
 	 */
 	server.tool(
 		'get_case_timeline',
@@ -245,6 +251,20 @@ export function registerEventTools(server: McpServer) {
 					});
 				}
 
+				// Coerce case_id against the declared key kind so an int-keyed
+				// case can't be queried with a non-numeric string. Mirrors the
+				// validation ingest_event already applies to correlations.
+				const coerced = coerceCorrelation(keyDef, case_id);
+				if ('error' in coerced) {
+					return jsonContent({
+						status: 'error',
+						reason: coerced.error,
+						case_key,
+						expected_kind: keyDef.kind,
+					});
+				}
+				const caseIdValue = coerced.value;
+
 				const idCol = schema.value.id_column;
 				const tsCol = schema.value.timestamp_column;
 				const typeCol = schema.value.type_column;
@@ -261,7 +281,7 @@ export function registerEventTools(server: McpServer) {
 					.join(', ');
 
 				const sql = `SELECT ${selectCols} FROM ${schema.value.table} WHERE ${keyDef.column} = $1 ORDER BY ${tsCol} ASC LIMIT $2`;
-				const result = await executeQuery(sql, [case_id, limit]);
+				const result = await executeQuery(sql, [caseIdValue, limit]);
 				const events = result.rows as Array<Record<string, unknown>>;
 
 				const timeline = events.map((e, i) => {
@@ -294,7 +314,7 @@ export function registerEventTools(server: McpServer) {
 				return jsonContent({
 					status: 'ok',
 					case_key,
-					case_id,
+					case_id: caseIdValue,
 					total_events: timeline.length,
 					timeline,
 					total_duration_minutes: totalDuration,
