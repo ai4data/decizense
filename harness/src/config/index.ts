@@ -180,34 +180,51 @@ export interface BusinessRule {
  * violation of this rule mechanically. Several kinds are supported so
  * scenario authors can express rules in whichever shape fits best.
  */
+/** Shared pattern-set shape used by sql_pattern and text_pattern checks. */
+export interface PatternSet {
+	/** All tokens must be present (case-insensitive substring match). */
+	require_all?: string[];
+	/** At least one token must be present. */
+	require_any?: string[];
+	/** None of these tokens may be present. */
+	forbid_any?: string[];
+}
+
 export type RuleCheck =
 	| {
 			kind: 'sql_pattern';
-			/** Require the candidate SQL (lowercased) to contain all tokens. */
-			require_all?: string[];
-			/** Require the candidate SQL to contain at least one token. */
-			require_any?: string[];
-			/** Reject the candidate SQL if it contains any of these tokens. */
-			forbid_any?: string[];
-			/** Human explanation if the check fails. */
+			/**
+			 * Gate: only evaluate require/forbid if the SQL matches this
+			 * pattern-set. If applies_when is absent the check always
+			 * applies. If applies_when doesn't match, the check reports
+			 * `not_applicable` — neither pass nor fail.
+			 */
+			applies_when?: PatternSet;
+			/** Conjunction of constraints on the SQL (lowercased). */
+			require?: PatternSet;
+			message?: string;
+	  }
+	| {
+			kind: 'text_pattern';
+			/** Same semantics as sql_pattern but the target is result_summary. */
+			applies_when?: PatternSet;
+			require?: PatternSet;
 			message?: string;
 	  }
 	| {
 			kind: 'pii_columns';
-			/** Rejects if the SQL references any column listed in scope.blocked_columns. */
+			/** Rejects if the SQL references any column in scope.blocked_columns (policy-driven). */
 			message?: string;
 	  }
 	| {
 			kind: 'query_result';
 			/** Harness-executed query; result must satisfy `expect` to pass. */
 			sql: string;
-			/** E.g. { column: "count", op: "<=", value: 0 }. */
 			expect: { column: string; op: '==' | '!=' | '<' | '<=' | '>' | '>='; value: number | string };
 			message?: string;
 	  }
 	| {
 			kind: 'manual';
-			/** Rule is enforced out-of-band (human review). */
 			message?: string;
 	  };
 
