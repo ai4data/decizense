@@ -101,4 +101,7 @@ echo "[smoke] Running scenario-neutrality regression (no LLM, no DB)..."
 cd "${ROOT_DIR}/harness"
 ./node_modules/.bin/tsx src/tests/test-scenario-neutral.ts
 
+echo "[smoke] Running semantic-compiler regression (no LLM, no DB)..."
+./node_modules/.bin/tsx src/tests/test-semantic-compiler.ts
+
 echo "[smoke] OK"

@@ -172,9 +172,14 @@ async function runSubagentStep(agentId: string, subQuestion: string, sessionId: 
 			rules: rulesResp.matched_rules ?? [],
 		});
 
-		const answer = await callLLM(systemPrompt, subQuestion, async (sql: string, reason: string) => {
-			return await harness.queryData(sql, reason);
-		});
+		const answer = await callLLM(
+			systemPrompt,
+			subQuestion,
+			async (sql: string, reason: string) => harness.queryData(sql, reason),
+			{
+				metricsFn: async (args) => harness.callTool('query_metrics', args),
+			},
+		);
 
 		await harness.writeFinding(sessionId, answer, 'high', tables);
 		return { agentId, answer };

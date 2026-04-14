@@ -18,7 +18,7 @@ starting the server.
   policies/policy.yml            required   pii columns, defaults, freshness
   datasets/<bundle>/dataset.yaml required   bundle tables + allowed joins
   semantics/
-    semantic_model.yml           required   measures + dimensions
+    semantic_model.yml           required   measures + dimensions; consumed by query_metrics
     business_rules.yml           required   rules (with optional `check`)
     signals.yml                  optional   process-signal definitions
     events.yml                   optional   event-log schema + correlation keys
@@ -120,6 +120,123 @@ correlation_keys: # required — at least one
   error.
 - **No string interpolation into SQL.** Both tools assemble SQL from
   the column names you declared and bind values via pg placeholders.
+
+## `semantics/semantic_model.yml` and the `query_metrics` tool
+
+The semantic model is the executable definition of every governed
+metric in the scenario. The harness's `query_metrics` MCP tool
+compiles requests against this file into parameterised PostgreSQL —
+no string interpolation, no LLM-authored SQL, no scaffolding.
+
+### Model shape
+
+```yaml
+models:
+    - name: flights # the user-facing model name
+      table: { schema: public, table: flights }
+      time_dimension: scheduled_departure # column name (bare)
+
+      dimensions:
+          - name: airline # caller refs as "flights.airline"
+            column: airline_code # actual db column
+
+      measures:
+          - name: delayed_flights # caller refs as "flights.delayed_flights"
+            column: flight_id
+            aggregation: count # count | count_distinct | sum | avg | min | max
+            filters: # measure-level FILTER (WHERE …) clause
+                - column: status
+                  operator: '='
+                  value: delayed
+```
+
+Joins between models are not declared in `semantic_model.yml` —
+they live per-bundle in `datasets/<bundle>/dataset.yaml`. The
+compiler refuses cross-model queries when no bundle-level join
+exists between them.
+
+### `query_metrics` request shape
+
+```jsonc
+{
+	"measures": ["flights.delayed_flights", "flights.total_flights"], // required
+	"dimensions": ["flights.airline"], // optional
+	"filters": [
+		// optional; each operator family supported below
+		{ "field": "flights.status", "operator": "!=", "value": "cancelled" },
+	],
+	"time_range": { "start": "2026-03-01", "end": "2026-04-01" }, // optional
+	"time_grain": "week", // optional: year|quarter|month|week|day|hour
+	"order_by": [{ "field": "delayed_flights", "direction": "desc" }], // optional
+	"limit": 10, // optional, clamped to [1, 50000]
+}
+```
+
+Operators: `=`, `!=`, `<`, `<=`, `>`, `>=` (single value), `in` /
+`not_in` (with `values` array), `is_null` / `is_not_null` (no value),
+`between` (with `range: [low, high]`).
+
+### `query_metrics` response shape
+
+```jsonc
+{
+    "status": "ok",
+    "rows": [{ "airline": "NF", "delayed_flights": "7", "total_flights": "99" }, …],
+    "row_count": 5,
+    "generated_sql": "SELECT \"flights\".\"airline_code\" AS \"airline\", COUNT(flights.flight_id) FILTER (WHERE flights.status = $1) AS \"delayed_flights\", …",
+    "resolved_measures": [
+        {
+            "ref": "flights.delayed_flights",
+            "expression": "COUNT(flights.flight_id) FILTER (WHERE flights.status = $1)",
+        },
+    ],
+    "resolved_dimensions": [{ "ref": "flights.airline", "column": "flights.airline_code" }],
+    "applied_time_window": { "column": "flights.scheduled_departure", "start": "2026-03-01", "end": "2026-04-01" },
+    "governance": { "policy_version": "<sha>", "contract_id": "<id>" },
+}
+```
+
+The `generated_sql` and `resolved_*` blocks are first-class —
+callers see exactly what was computed without inferring it from the
+rows.
+
+### Structured errors
+
+When validation fails the tool returns `{status: "error", code,
+reason, details}` rather than throwing. Codes the planner / compiler
+can emit:
+
+- `unknown_measure` / `unknown_dimension` — with `available` list +
+  `suggestion` (Levenshtein "did you mean?").
+- `ambiguous_ref` — bare `field` without `model.` prefix is rejected
+  even when unique today.
+- `unknown_model` / `invalid_aggregation` / `invalid_operator` /
+  `invalid_value` / `invalid_time_range` / `invalid_time_grain`.
+- `out_of_bundle` — the requested model isn't in the agent's bundle.
+- `disallowed_join` — cross-model query without an allowed_joins edge
+  in the agent's bundle. Echoes `declared_in_bundle` for diagnostics.
+- `fanout_refused` — non-distinct aggregation across a one_to_many
+  join would silently double-count. Suggests `count_distinct` or
+  per-model aggregation.
+- `time_filter_required` — bundle declares a mandatory time filter
+  that the request omitted.
+- `governance_blocked` — OPA refused the compiled SQL or the
+  metric_refs.
+- `execution_failed` — Postgres rejected the SQL after compilation.
+
+### What stays in code, what stays in YAML
+
+| Concern                         | YAML               | Code                                  |
+| ------------------------------- | ------------------ | ------------------------------------- |
+| Measure / dimension names       | semantic_model.yml | —                                     |
+| Aggregation kind                | semantic_model.yml | `ALLOWED_AGGREGATIONS` set            |
+| Measure-level FILTER predicates | semantic_model.yml | —                                     |
+| Cross-model joins               | dataset.yaml       | —                                     |
+| Bundle scope                    | dataset.yaml       | enforced by planner                   |
+| PII columns                     | policy.yml         | filtered by executor (via governance) |
+| Time-filter requirements        | dataset.yaml       | enforced by planner                   |
+| SQL skeleton & quoting          | —                  | sql-compiler.ts                       |
+| Param binding                   | —                  | sql-compiler.ts (pg `$N` only)        |
 
 ## `semantics/business_rules.yml` — the `check` field
 

@@ -191,6 +191,21 @@ export interface EvaluateGovernanceParams {
 	tables?: string[];
 	columns?: string[];
 	metric_refs?: string[];
+	/**
+	 * Explicit MCP tool name. When omitted, the legacy heuristic is used
+	 * (sql present → "query_data", else → "query_metrics"). Callers that
+	 * compile SQL but want to be classified as query_metrics (e.g. the
+	 * semantic executor) must pass this explicitly.
+	 */
+	tool_name?: 'query_data' | 'query_metrics';
+	/**
+	 * Override for the limit OPA sees. Required when the caller bound
+	 * LIMIT as a positional pg parameter (`LIMIT $N`) — the SQL-text
+	 * regex parser in parseSql can only see literal LIMITs and would
+	 * otherwise report has_limit=false. The semantic executor passes
+	 * the planner-clamped integer here so OPA can enforce max-row caps.
+	 */
+	limit_value_override?: number;
 }
 
 /**
@@ -244,15 +259,19 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 
 	const opaInput: OpaInput = {
 		agent_id: agentId,
-		tool_name: params.sql ? 'query_data' : 'query_metrics',
+		tool_name: params.tool_name ?? (params.sql ? 'query_data' : 'query_metrics'),
 		sql: params.sql ?? '',
 		metric_refs: params.metric_refs ?? [],
 		parsed: parsed
 			? {
 					tables: parsed.tables,
 					columns: parsed.columns,
-					has_limit: parsed.hasLimit,
-					limit_value: parsed.limitValue,
+					// limit_value_override wins over the SQL-text parse — the
+					// semantic compiler binds LIMIT as $N, which the regex
+					// parser can't see, but the planner-clamped integer is
+					// safe to forward to OPA verbatim.
+					has_limit: params.limit_value_override !== undefined ? true : parsed.hasLimit,
+					limit_value: params.limit_value_override ?? parsed.limitValue,
 					is_read_only: parsed.isReadOnly,
 					statement_count: parsed.statementCount,
 					joins: parsed.joins.map((j) => ({ left_col: j.leftCol, right_col: j.rightCol })),
@@ -260,8 +279,8 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 			: {
 					tables: [],
 					columns: [],
-					has_limit: false,
-					limit_value: null,
+					has_limit: params.limit_value_override !== undefined,
+					limit_value: params.limit_value_override ?? null,
 					is_read_only: true,
 					statement_count: 0,
 					joins: [],

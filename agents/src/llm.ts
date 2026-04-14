@@ -11,6 +11,7 @@
  */
 
 type QueryFn = (sql: string, reason: string) => Promise<unknown>;
+type MetricsFn = (args: Record<string, unknown>) => Promise<unknown>;
 
 // ─── Mock mode (dev/test only) ─────────────────────────────────────────────
 
@@ -103,22 +104,28 @@ export async function callLLM(
 	systemPrompt: string,
 	question: string,
 	queryFn: QueryFn,
-	maxSteps = 12,
+	maxStepsOrOpts: number | { maxSteps?: number; metricsFn?: MetricsFn } = 12,
 ): Promise<string> {
+	const opts = typeof maxStepsOrOpts === 'number' ? { maxSteps: maxStepsOrOpts } : maxStepsOrOpts;
+	const maxSteps = opts.maxSteps ?? 12;
+	const metricsFn = opts.metricsFn;
+
 	if (isMockEnabled()) {
 		assertMockAllowed();
 		logMockWarningOnce();
 		// Mock bypasses the tool loop entirely — deterministic for tests.
 		void queryFn; // explicitly not called in mock mode
+		void metricsFn;
 		return mockLlmResponse(systemPrompt, question);
 	}
 
-	const tools = [
+	const tools: Array<Record<string, unknown>> = [
 		{
 			type: 'function',
 			function: {
 				name: 'query_data',
-				description: 'Execute a governed SQL query against the database',
+				description:
+					'Execute a governed ad-hoc SQL query. Use only when the question cannot be expressed as governed measures + dimensions; prefer query_metrics when it can.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -130,6 +137,69 @@ export async function callLLM(
 			},
 		},
 	];
+
+	if (metricsFn) {
+		tools.push({
+			type: 'function',
+			function: {
+				name: 'query_metrics',
+				description:
+					'Compute governed measures (defined in semantic_model.yml) over optional dimensions, filters, time_range, time_grain, order_by, limit. The harness compiles to SQL, applies governance, returns rows + the generated SQL + the resolved measure / dimension refs. Always preferred over query_data when the question maps onto declared measures and dimensions, because business-rule logic (e.g. "exclude cancelled") is baked into the measure definition.',
+				parameters: {
+					type: 'object',
+					properties: {
+						measures: {
+							type: 'array',
+							items: { type: 'string' },
+							description: "Measure refs as 'model.measure_name', e.g. 'flights.delayed_flights'.",
+						},
+						dimensions: { type: 'array', items: { type: 'string' } },
+						filters: {
+							type: 'array',
+							items: {
+								type: 'object',
+								properties: {
+									field: { type: 'string' },
+									operator: { type: 'string' },
+									value: { type: ['string', 'number', 'boolean', 'null'] },
+									values: {
+										type: 'array',
+										items: { type: ['string', 'number', 'boolean', 'null'] },
+									},
+									range: {
+										type: 'array',
+										items: { type: ['string', 'number', 'null'] },
+										minItems: 2,
+										maxItems: 2,
+									},
+								},
+								required: ['field', 'operator'],
+							},
+						},
+						time_range: {
+							type: 'object',
+							properties: { start: { type: 'string' }, end: { type: 'string' } },
+							required: ['start', 'end'],
+						},
+						time_grain: { type: 'string', enum: ['year', 'quarter', 'month', 'week', 'day', 'hour'] },
+						order_by: {
+							type: 'array',
+							items: {
+								type: 'object',
+								properties: {
+									field: { type: 'string' },
+									direction: { type: 'string', enum: ['asc', 'desc'] },
+								},
+								required: ['field', 'direction'],
+							},
+						},
+						limit: { type: 'integer' },
+					},
+					required: ['measures'],
+				},
+			},
+		});
+	}
 
 	const messages: any[] = [
 		{ role: 'system', content: systemPrompt },
@@ -150,7 +220,12 @@ export async function callLLM(
 			messages.push(msg);
 			for (const toolCall of msg.tool_calls) {
 				const args = JSON.parse(toolCall.function.arguments);
-				const result = await queryFn(args.sql, args.reason);
+				let result: unknown;
+				if (toolCall.function.name === 'query_metrics' && metricsFn) {
+					result = await metricsFn(args);
+				} else {
+					result = await queryFn(args.sql, args.reason);
+				}
 				lastToolResult = result;
 				messages.push({
 					role: 'tool',
