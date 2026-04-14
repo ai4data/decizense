@@ -14,7 +14,60 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { ScenarioLoader, type SignalDefinition, type SignalParam } from '../config/index.js';
 import { executeQuery } from '../database/index.js';
+
+let loader: ScenarioLoader | null = null;
+
+export function initEventTools(scenarioPath: string) {
+	loader = new ScenarioLoader(scenarioPath);
+}
+
+/**
+ * Bind caller-provided arguments to a signal's declared params, in the
+ * declared order, applying defaults and lightweight validation. Returns
+ * the values ready to pass to pg as positional placeholders — or an
+ * error string if validation fails. No SQL text manipulation happens
+ * here; the template is used verbatim.
+ */
+function bindSignalParams(
+	def: SignalDefinition,
+	args: Record<string, unknown>,
+): { values: unknown[] } | { error: string } {
+	const values: unknown[] = [];
+	for (const p of def.params) {
+		const raw = args[p.name];
+		const provided = raw !== undefined && raw !== null;
+		if (!provided && p.required && p.default === undefined) {
+			return { error: `Missing required parameter "${p.name}" for signal "${def.name}"` };
+		}
+		const val = provided ? raw : p.default;
+		const bound = coerceParam(p, val);
+		if ('error' in bound) return bound;
+		values.push(bound.value);
+	}
+	return { values };
+}
+
+function coerceParam(p: SignalParam, val: unknown): { value: unknown } | { error: string } {
+	if (p.kind === 'int') {
+		const n = typeof val === 'number' ? val : typeof val === 'string' ? Number(val) : NaN;
+		if (!Number.isFinite(n) || !Number.isInteger(n)) {
+			return { error: `Parameter "${p.name}" must be an integer (got ${JSON.stringify(val)})` };
+		}
+		if (p.max !== undefined && n > p.max) {
+			return { error: `Parameter "${p.name}" exceeds max (${p.max})` };
+		}
+		return { value: p.as_interval_days ? `${n} days` : n };
+	}
+	if (p.kind === 'string') {
+		if (typeof val !== 'string') {
+			return { error: `Parameter "${p.name}" must be a string` };
+		}
+		return { value: val };
+	}
+	return { error: `Unknown param kind for "${p.name}"` };
+}
 
 export function registerEventTools(server: McpServer) {
 	/**
@@ -181,97 +234,67 @@ export function registerEventTools(server: McpServer) {
 		'Analyze event log for operational patterns, bottlenecks, and anomalies',
 		{
 			signal_type: z
-				.enum(['event_distribution', 'failure_rates', 'step_durations', 'delay_patterns'])
-				.describe('Type of signal to compute'),
-			time_range_days: z.number().optional().default(30).describe('Look back N days'),
+				.string()
+				.describe('Name of the signal to compute (scenario-defined; see configured_signals in errors).'),
+			time_range_days: z.number().optional().describe('Look back N days (if the signal accepts this parameter).'),
 		},
-		async ({ signal_type, time_range_days }) => {
+		async (args) => {
 			try {
-				let query: string;
-				let description: string;
-				const intervalParam = `${time_range_days} days`;
-
-				switch (signal_type) {
-					case 'event_distribution':
-						description = 'Distribution of event types in the operational log';
-						query = `
-							SELECT event_type, COUNT(*) as count,
-							       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percentage
-							FROM events
-							WHERE timestamp >= NOW() - $1::interval
-							GROUP BY event_type
-							ORDER BY count DESC
-							LIMIT 20`;
-						break;
-
-					case 'failure_rates':
-						description = 'Payment failure and booking cancellation rates';
-						query = `
-							SELECT
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentFailed'
-							   AND timestamp >= NOW() - $1::interval) as payment_failures,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentSucceeded'
-							   AND timestamp >= NOW() - $1::interval) as payment_successes,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCancelled'
-							   AND timestamp >= NOW() - $1::interval) as cancellations,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCreated'
-							   AND timestamp >= NOW() - $1::interval) as total_bookings`;
-						break;
-
-					case 'step_durations':
-						description = 'Average time between process steps (bottleneck detection)';
-						query = `
-							WITH step_pairs AS (
-							  SELECT
-							    e1.booking_id,
-							    e1.event_type as from_step,
-							    e2.event_type as to_step,
-							    EXTRACT(EPOCH FROM (e2.timestamp - e1.timestamp)) / 60 as minutes
-							  FROM events e1
-							  JOIN events e2 ON e1.booking_id = e2.booking_id
-							    AND e2.timestamp > e1.timestamp
-							    AND e2.event_type IN ('PaymentSucceeded', 'TicketIssued', 'CheckInCompleted', 'BoardingStarted')
-							    AND e1.event_type IN ('BookingCreated', 'PaymentSucceeded', 'TicketIssued', 'CheckInCompleted')
-							  WHERE e1.timestamp >= NOW() - $1::interval
-							    AND NOT EXISTS (
-							      SELECT 1 FROM events e3
-							      WHERE e3.booking_id = e1.booking_id
-							        AND e3.timestamp > e1.timestamp
-							        AND e3.timestamp < e2.timestamp
-							        AND e3.event_type = e2.event_type
-							    )
-							)
-							SELECT from_step, to_step,
-							       ROUND(AVG(minutes)::numeric, 1) as avg_minutes,
-							       ROUND(MIN(minutes)::numeric, 1) as min_minutes,
-							       ROUND(MAX(minutes)::numeric, 1) as max_minutes,
-							       COUNT(*) as sample_size
-							FROM step_pairs
-							WHERE minutes > 0
-							GROUP BY from_step, to_step
-							ORDER BY avg_minutes DESC
-							LIMIT 10`;
-						break;
-
-					case 'delay_patterns':
-						description = 'Flight delay patterns by reason, day of week, and airport';
-						query = `
-							SELECT
-							  fd.reason,
-							  COUNT(*) as delay_count,
-							  ROUND(AVG(fd.delay_minutes)::numeric, 1) as avg_minutes,
-							  ROUND(MAX(fd.delay_minutes)::numeric, 1) as max_minutes,
-							  ROUND(SUM(fd.delay_minutes)::numeric, 0) as total_minutes
-							FROM flight_delays fd
-							JOIN flights f ON fd.flight_id = f.flight_id
-							WHERE fd.reported_at >= NOW() - $1::interval
-							GROUP BY fd.reason
-							ORDER BY delay_count DESC
-							LIMIT 10`;
-						break;
+				if (!loader) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									status: 'error',
+									reason: 'get_process_signals called before tool initialisation',
+								}),
+							},
+						],
+					};
 				}
 
-				const result = await executeQuery(query, [intervalParam]);
+				const signals = loader.signals;
+				const requested = args.signal_type;
+				const def = signals.find((s) => s.name === requested);
+
+				if (!def) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									status: 'unsupported',
+									signal_type: requested,
+									reason: `Signal "${requested}" is not configured for this scenario. Add an entry to <scenario>/semantics/signals.yml.`,
+									configured_signals: signals.map((s) => ({
+										name: s.name,
+										description: s.description,
+										params: s.params.map((p) => ({
+											name: p.name,
+											kind: p.kind,
+											required: p.required,
+										})),
+									})),
+								}),
+							},
+						],
+					};
+				}
+
+				const bound = bindSignalParams(def, args as Record<string, unknown>);
+				if ('error' in bound) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({ status: 'error', signal_type: requested, reason: bound.error }),
+							},
+						],
+					};
+				}
+
+				const result = await executeQuery(def.sql, bound.values as unknown[]);
 
 				return {
 					content: [
@@ -279,9 +302,15 @@ export function registerEventTools(server: McpServer) {
 							type: 'text' as const,
 							text: JSON.stringify(
 								{
-									signal_type,
-									description,
-									time_range_days,
+									status: 'ok',
+									signal_type: def.name,
+									description: def.description,
+									params: Object.fromEntries(
+										def.params.map((p, i) => [
+											p.name,
+											(args as Record<string, unknown>)[p.name] ?? p.default,
+										]),
+									),
 									data: result.rows,
 									row_count: result.rowCount,
 								},
@@ -296,7 +325,10 @@ export function registerEventTools(server: McpServer) {
 					content: [
 						{
 							type: 'text' as const,
-							text: JSON.stringify({ error: `Failed to get signals: ${(err as Error).message}` }),
+							text: JSON.stringify({
+								status: 'error',
+								reason: `Failed to get signals: ${(err as Error).message}`,
+							}),
 						},
 					],
 				};

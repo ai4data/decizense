@@ -1,0 +1,125 @@
+# Process-signal definitions for the travel scenario.
+# Read by harness/src/tools/event.ts at runtime. The harness itself
+# contains no travel-specific event names or tables — all such
+# knowledge lives here as data.
+#
+# Each signal has:
+#   name            — matches the requested `signal_type` in
+#                     get_process_signals.
+#   description     — surfaced to the caller in the response.
+#   sql             — pg-parameterised template. Placeholders $1, $2,
+#                     ... bind in the order declared in `params`.
+#   params          — ordered parameter list. Each entry names the
+#                     caller-visible argument, its kind, and (for
+#                     integer parameters that represent day counts) a
+#                     flag that asks the harness to format it as a pg
+#                     interval literal before binding.
+#   required_tables — informational only; helps reviewers see which
+#                     tables a template reads without parsing SQL.
+
+signals:
+    - name: event_distribution
+      description: Distribution of event types in the operational log.
+      required_tables: [events]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          SELECT event_type, COUNT(*) as count,
+                 ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percentage
+          FROM events
+          WHERE timestamp >= NOW() - $1::interval
+          GROUP BY event_type
+          ORDER BY count DESC
+          LIMIT 20
+
+    - name: failure_rates
+      description: Payment failure and booking cancellation rates.
+      required_tables: [events]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          SELECT
+            (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentFailed'
+             AND timestamp >= NOW() - $1::interval) as payment_failures,
+            (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentSucceeded'
+             AND timestamp >= NOW() - $1::interval) as payment_successes,
+            (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCancelled'
+             AND timestamp >= NOW() - $1::interval) as cancellations,
+            (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCreated'
+             AND timestamp >= NOW() - $1::interval) as total_bookings
+
+    - name: step_durations
+      description: Average time between process steps (bottleneck detection).
+      required_tables: [events]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          WITH step_pairs AS (
+            SELECT
+              e1.booking_id,
+              e1.event_type as from_step,
+              e2.event_type as to_step,
+              EXTRACT(EPOCH FROM (e2.timestamp - e1.timestamp)) / 60 as minutes
+            FROM events e1
+            JOIN events e2 ON e1.booking_id = e2.booking_id
+              AND e2.timestamp > e1.timestamp
+              AND e2.event_type IN ('PaymentSucceeded', 'TicketIssued', 'CheckInCompleted', 'BoardingStarted')
+              AND e1.event_type IN ('BookingCreated', 'PaymentSucceeded', 'TicketIssued', 'CheckInCompleted')
+            WHERE e1.timestamp >= NOW() - $1::interval
+              AND NOT EXISTS (
+                SELECT 1 FROM events e3
+                WHERE e3.booking_id = e1.booking_id
+                  AND e3.timestamp > e1.timestamp
+                  AND e3.timestamp < e2.timestamp
+                  AND e3.event_type = e2.event_type
+              )
+          )
+          SELECT from_step, to_step,
+                 ROUND(AVG(minutes)::numeric, 1) as avg_minutes,
+                 ROUND(MIN(minutes)::numeric, 1) as min_minutes,
+                 ROUND(MAX(minutes)::numeric, 1) as max_minutes,
+                 COUNT(*) as sample_size
+          FROM step_pairs
+          WHERE minutes > 0
+          GROUP BY from_step, to_step
+          ORDER BY avg_minutes DESC
+          LIMIT 10
+
+    - name: delay_patterns
+      description: Flight delay patterns by reason.
+      required_tables: [flight_delays, flights]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          SELECT
+            fd.reason,
+            COUNT(*) as delay_count,
+            ROUND(AVG(fd.delay_minutes)::numeric, 1) as avg_minutes,
+            ROUND(MAX(fd.delay_minutes)::numeric, 1) as max_minutes,
+            ROUND(SUM(fd.delay_minutes)::numeric, 0) as total_minutes
+          FROM flight_delays fd
+          JOIN flights f ON fd.flight_id = f.flight_id
+          WHERE fd.reported_at >= NOW() - $1::interval
+          GROUP BY fd.reason
+          ORDER BY delay_count DESC
+          LIMIT 10

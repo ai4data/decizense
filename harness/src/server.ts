@@ -41,7 +41,7 @@ import {
 import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
-import { registerEventTools } from './tools/event.js';
+import { registerEventTools, initEventTools } from './tools/event.js';
 import { registerPersistTools, initPersistTools } from './tools/persist.js';
 import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
 import { registerAdminTools, initAdminTools } from './tools/admin.js';
@@ -98,6 +98,7 @@ async function initializeSharedState(): Promise<ScenarioLoader> {
 	initContextTools(scenarioPath);
 	initControlTools(scenarioPath);
 	initActionTools(scenarioPath);
+	initEventTools(scenarioPath);
 	initPersistTools(scenarioPath);
 	initVerifyTools(scenarioPath);
 	initAdminTools(scenarioPath);

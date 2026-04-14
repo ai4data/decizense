@@ -167,6 +167,86 @@ export interface BusinessRule {
 		author?: string;
 		date?: string;
 	};
+	/**
+	 * Optional machine-checkable definition. If absent, verify_result /
+	 * check_consistency will report `manual-verification-needed` rather
+	 * than hardcoding travel-specific rule-name string matches.
+	 */
+	check?: RuleCheck;
+}
+
+/**
+ * A RuleCheck tells the verify tools how to detect compliance or
+ * violation of this rule mechanically. Several kinds are supported so
+ * scenario authors can express rules in whichever shape fits best.
+ */
+export type RuleCheck =
+	| {
+			kind: 'sql_pattern';
+			/** Require the candidate SQL (lowercased) to contain all tokens. */
+			require_all?: string[];
+			/** Require the candidate SQL to contain at least one token. */
+			require_any?: string[];
+			/** Reject the candidate SQL if it contains any of these tokens. */
+			forbid_any?: string[];
+			/** Human explanation if the check fails. */
+			message?: string;
+	  }
+	| {
+			kind: 'pii_columns';
+			/** Rejects if the SQL references any column listed in scope.blocked_columns. */
+			message?: string;
+	  }
+	| {
+			kind: 'query_result';
+			/** Harness-executed query; result must satisfy `expect` to pass. */
+			sql: string;
+			/** E.g. { column: "count", op: "<=", value: 0 }. */
+			expect: { column: string; op: '==' | '!=' | '<' | '<=' | '>' | '>='; value: number | string };
+			message?: string;
+	  }
+	| {
+			kind: 'manual';
+			/** Rule is enforced out-of-band (human review). */
+			message?: string;
+	  };
+
+/**
+ * Process-signal definition — scenario-provided SQL template that the
+ * harness dispatches on via tools/event.ts. Keeps the harness free of
+ * travel-specific event names and table references.
+ */
+export interface SignalDefinition {
+	name: string;
+	description: string;
+	/**
+	 * SQL template. Uses pg parameter placeholders ($1, $2, ...) bound
+	 * in the order of `params`. No string substitution of runtime values
+	 * into the SQL text is permitted — prevents injection.
+	 */
+	sql: string;
+	/**
+	 * Ordered list of parameters the caller may supply. Each entry maps
+	 * to a pg placeholder ($1 for params[0], $2 for params[1], ...).
+	 */
+	params: SignalParam[];
+	/** Informational only — tables the template reads. */
+	required_tables?: string[];
+}
+
+export interface SignalParam {
+	name: string;
+	kind: 'int' | 'string';
+	required: boolean;
+	default?: number | string;
+	/** For int params, an optional max to bound the scan. */
+	max?: number;
+	/** If present and the caller passes `time_range_days`, format as pg interval. */
+	as_interval_days?: boolean;
+}
+
+export interface SignalsConfig {
+	signals: SignalDefinition[];
 }
 
 export interface SemanticMeasure {
@@ -284,6 +364,18 @@ export class ScenarioLoader {
 
 	get semanticModel(): SemanticModel {
 		return loadYaml<SemanticModel>(join(this.scenarioPath, 'semantics', 'semantic_model.yml'));
+	}
+
+	/**
+	 * Scenario-supplied process-signal definitions. Returns an empty
+	 * array (not throw) when the scenario has no signals.yml — the
+	 * harness must degrade to `unsupported` rather than crash.
+	 */
+	get signals(): SignalDefinition[] {
+		const path = join(this.scenarioPath, 'semantics', 'signals.yml');
+		if (!existsSync(path)) return [];
+		const data = loadYaml<SignalsConfig>(path);
+		return data.signals ?? [];
 	}
 
 	/**
