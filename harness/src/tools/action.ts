@@ -19,11 +19,17 @@ import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getCurrentAuthContext } from '../auth/context.js';
 import { shortHash, setAuthAttributes, getActiveSpan } from '../observability/span.js';
+import { initSemantic, runMetricQuery } from '../semantic/executor.js';
+import { SemanticError, type MetricQueryRequest } from '../semantic/types.js';
 
 let loader: ScenarioLoader | null = null;
 
 export function initActionTools(scenarioPath: string) {
 	loader = new ScenarioLoader(scenarioPath);
+	// Eagerly build the semantic registry so YAML errors (duplicate
+	// names, unsupported aggregations) surface at server startup rather
+	// than on the first query_metrics call.
+	initSemantic(scenarioPath);
 }
 
 export function registerActionTools(server: McpServer) {
@@ -134,49 +140,63 @@ export function registerActionTools(server: McpServer) {
 		},
 	);
 
-	// ─── query_metrics (unchanged — scaffold) ───
+	// ─── query_metrics ───
+	// Real semantic execution. Schema, planner, compiler, executor, and
+	// governance integration live in harness/src/semantic/. This handler
+	// is the thin shim that converts the request into a structured
+	// MetricQueryResult or a structured SemanticError response.
+
+	const requestFilterSchema = z.object({
+		field: z.string(),
+		operator: z.enum(['=', '!=', '<', '<=', '>', '>=', 'in', 'not_in', 'is_null', 'is_not_null', 'between']),
+		value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+		values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+		range: z
+			.tuple([z.union([z.string(), z.number(), z.null()]), z.union([z.string(), z.number(), z.null()])])
+			.optional(),
+	});
 
 	server.tool(
 		'query_metrics',
-		'Query semantic measures and dimensions — governance enforced automatically',
+		'Query governed semantic measures + dimensions. Returns rows, generated SQL, and the resolved measure / dimension refs so callers see exactly what was computed.',
 		{
-			measures: z.array(z.string()).describe("Measure names (e.g. ['bookings.total_revenue'])"),
-			dimensions: z.array(z.string()).optional().describe('Dimensions to group by'),
-			filters: z.array(z.object({ dimension: z.string(), operator: z.string(), value: z.string() })).optional(),
+			measures: z
+				.array(z.string())
+				.min(1)
+				.describe("Measure refs as 'model.measure_name', e.g. 'flights.delayed_flights'."),
+			dimensions: z.array(z.string()).optional().describe("Dimension refs as 'model.dimension_name'. Optional."),
+			filters: z.array(requestFilterSchema).optional(),
+			time_range: z.object({ start: z.string(), end: z.string() }).optional(),
+			time_grain: z.enum(['year', 'quarter', 'month', 'week', 'day', 'hour']).optional(),
+			order_by: z.array(z.object({ field: z.string(), direction: z.enum(['asc', 'desc']) })).optional(),
+			limit: z.number().int().positive().optional(),
 		},
-		async ({ measures, dimensions, filters }, extra) => {
+		async (input, extra) => {
 			const ctx = getCurrentAuthContext(extra);
-			const governance = await evaluateGovernance({ authContext: ctx, metric_refs: measures });
-			if (!governance.allowed) {
+			try {
+				const result = await runMetricQuery(ctx, input as MetricQueryRequest);
+				return {
+					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+				};
+			} catch (err) {
+				if (err instanceof SemanticError) {
+					return {
+						content: [{ type: 'text' as const, text: JSON.stringify(err.toResponse(), null, 2) }],
+					};
+				}
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: JSON.stringify({ status: 'blocked', reason: governance.reason }),
+							text: JSON.stringify({
+								status: 'error',
+								code: 'execution_failed',
+								reason: (err as Error).message,
+							}),
 						},
 					],
 				};
 			}
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: JSON.stringify(
-							{
-								_scaffold: true,
-								status: 'success',
-								measures,
-								dimensions,
-								filters,
-								result: [{ placeholder: 'metric results' }],
-								generated_sql: 'placeholder: SQL from semantic engine',
-							},
-							null,
-							2,
-						),
-					},
-				],
-			};
 		},
 	);
 
