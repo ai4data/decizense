@@ -4,7 +4,7 @@
 	"description": "dazense Agent Harness — MCP server for governed multi-agent decision-making",
 	"type": "module",
 	"scripts": {
-		"dev": "tsx --env-file=.env.harness-dev watch src/server.ts",
+		"dev": "tsx watch --env-file=.env.harness-dev src/server.ts",
 		"start": "tsx --env-file=.env.harness-dev src/server.ts",
 		"build": "tsc"
 	},

@@ -253,10 +253,15 @@ wires it into the dev/start scripts via Node's `--env-file` flag:
 
 ```json
 "scripts": {
-  "dev":   "tsx --env-file=.env.harness-dev watch src/server.ts",
+  "dev":   "tsx watch --env-file=.env.harness-dev src/server.ts",
   "start": "tsx --env-file=.env.harness-dev src/server.ts"
 }
 ```
+
+Note the flag position in `dev`: tsx requires the `watch` subcommand
+to come **before** any flags. `tsx --env-file=… watch src/server.ts`
+errors with `ERR_MODULE_NOT_FOUND .../harness/watch` because tsx
+parses `watch` as the entry-point file rather than as the subcommand.
 
 From `harness/`:
 
