@@ -6,8 +6,11 @@
  */
 
 import { HarnessClient } from './harness-client.js';
+import { loadRepoEnv } from './load-env.js';
 import { callLLM } from './llm.js';
 import { runWithRootSpan } from './tracing.js';
+
+loadRepoEnv();
 
 const AGENT_ID = 'flight_ops';
 
