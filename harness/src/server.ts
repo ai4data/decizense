@@ -52,7 +52,15 @@ import { initDbos, shutdownDbos } from './workflows/dbos-init.js';
 // ─── Shared init ───────────────────────────────────────────────────────────
 
 async function initializeSharedState(): Promise<ScenarioLoader> {
-	const scenarioPath = process.env.SCENARIO_PATH || '../scenario/travel';
+	const scenarioPath = process.env.SCENARIO_PATH;
+	if (!scenarioPath || scenarioPath.trim() === '') {
+		console.error(
+			'[harness] Fatal: SCENARIO_PATH environment variable is required. ' +
+				'Point it at a scenario directory, e.g. SCENARIO_PATH=../scenario/travel. ' +
+				'The harness no longer defaults to the travel scenario implicitly — scenario choice is a deployment concern, not a fallback.',
+		);
+		process.exit(2);
+	}
 	console.error(`[harness] Loading scenario from: ${scenarioPath}`);
 
 	const loader = new ScenarioLoader(scenarioPath);
