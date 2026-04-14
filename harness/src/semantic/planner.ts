@@ -123,14 +123,20 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 					},
 				);
 			}
-			// Cardinality detection — conservative. Without column statistics
-			// we mark every cross-model join as one_to_many to surface the
-			// fan-out trap. Schemas can override later via metadata if needed.
+			// Normalise orientation so leftAlias is always the model that's
+			// already in the FROM clause (primary) and rightAlias is the new
+			// model being joined in. Without this, a bundle join authored as
+			// "flight_delays.flight_id = flights.flight_id" with primary=
+			// flights would produce a self-join on flights — the rightAlias
+			// column comes from edge.rightModel which equals primary.
+			//
+			// Cardinality stays one_to_many — see fanout-refusal note below.
+			const primaryIsLeft = edge.leftModel === primary.name;
 			joins.push({
-				leftAlias: edge.leftModel === primary.name ? primary.alias : other.alias,
-				leftColumn: edge.leftColumn,
-				rightAlias: edge.rightModel === primary.name ? primary.alias : other.alias,
-				rightColumn: edge.rightColumn,
+				leftAlias: primary.alias,
+				leftColumn: primaryIsLeft ? edge.leftColumn : edge.rightColumn,
+				rightAlias: other.alias,
+				rightColumn: primaryIsLeft ? edge.rightColumn : edge.leftColumn,
 				cardinality: 'one_to_many',
 			});
 		}
@@ -221,16 +227,23 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 	}
 
 	// ── Time-filter requirements ─────────────────────────────────────────
+	// Bundle declares the requirement as { table, column, max_days } —
+	// table is the database name. Our WHERE predicates reference columns
+	// as "<modelAlias>.<column>", and modelAlias may differ from the
+	// table name when scenario-author names the model differently
+	// (e.g. model "delays" over table "flight_delays"). Map the
+	// requirement to the planned model that backs that table before
+	// comparing.
 	for (const req of scope.timeFilters ?? []) {
-		const inUse = planned.some((p) => p.table === req.table);
-		if (!inUse) continue;
-		const col = `${req.table}.${req.column}`;
+		const planForReqTable = planned.find((p) => p.table === req.table);
+		if (!planForReqTable) continue;
+		const col = `${planForReqTable.alias}.${req.column}`;
 		const present = whereFilters.some((w) => w.column === col);
 		if (!present) {
 			throw new SemanticError(
 				'time_filter_required',
 				`Bundle "${scope.bundleId}" requires a time filter on ${col} (max ${req.max_days} days).`,
-				{ table: req.table, column: req.column, max_days: req.max_days },
+				{ table: req.table, column: req.column, max_days: req.max_days, model_alias: planForReqTable.alias },
 			);
 		}
 	}

@@ -191,6 +191,13 @@ export interface EvaluateGovernanceParams {
 	tables?: string[];
 	columns?: string[];
 	metric_refs?: string[];
+	/**
+	 * Explicit MCP tool name. When omitted, the legacy heuristic is used
+	 * (sql present → "query_data", else → "query_metrics"). Callers that
+	 * compile SQL but want to be classified as query_metrics (e.g. the
+	 * semantic executor) must pass this explicitly.
+	 */
+	tool_name?: 'query_data' | 'query_metrics';
 }
 
 /**
@@ -244,7 +251,7 @@ export async function evaluateGovernance(params: EvaluateGovernanceParams): Prom
 
 	const opaInput: OpaInput = {
 		agent_id: agentId,
-		tool_name: params.sql ? 'query_data' : 'query_metrics',
+		tool_name: params.tool_name ?? (params.sql ? 'query_data' : 'query_metrics'),
 		sql: params.sql ?? '',
 		metric_refs: params.metric_refs ?? [],
 		parsed: parsed

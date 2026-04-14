@@ -217,6 +217,55 @@ expectError(
 	'cross-model query with no allowed_joins → disallowed_join',
 );
 
+// ── 8a. Join orientation — reversed bundle join must not self-join ───────
+// Reviewer R4 finding #2: if a bundle stores the join as
+// "flight_delays.flight_id = flights.flight_id" and the planner picks
+// "flights" as primary, a naive implementation would set rightAlias =
+// flights, producing INNER JOIN "flights" AS "flights" ON … which is a
+// duplicate-alias self-join. The planner must normalise so leftAlias is
+// always the primary (already-FROMed) model.
+const reversedJoinScope: AgentScope = {
+	bundleId: 'flights-ops-reversed',
+	bundleTables: new Set(['flights', 'flight_delays']),
+	bundleJoins: [
+		// Note: flight_delays appears on the left, flights on the right.
+		{
+			left: { schema: 'public', table: 'flight_delays', column: 'flight_id' },
+			right: { schema: 'public', table: 'flights', column: 'flight_id' },
+		},
+	],
+	timeFilters: [],
+};
+
+const reversedPlan = plan(
+	{
+		// One measure (flights), one dimension (delays). Triggers a join
+		// without triggering fanout_refused (which only fires when measures
+		// span multiple models). Lets us test orientation in isolation.
+		measures: ['flights.total_flights'],
+		dimensions: ['delays.delay_reason'],
+	},
+	travelRegistry,
+	reversedJoinScope,
+);
+assertEqual(reversedPlan.joins.length, 1, 'one join planned');
+const j = reversedPlan.joins[0];
+assert(j.leftAlias !== j.rightAlias, 'reversed-orientation join: leftAlias != rightAlias (no self-join)');
+assert(j.leftAlias === reversedPlan.models[0].alias, 'leftAlias is the primary (FROM) model');
+const reversedSql = compile(reversedPlan).sql;
+// Structural check: the JOIN target alias must differ from the FROM
+// alias. A self-join from the orientation bug would produce
+//   FROM "public"."flights" AS "flights"
+//   INNER JOIN "public"."flights" AS "flights" ON …
+// — same table, same alias on both sides.
+const fromMatch = reversedSql.match(/FROM "[^"]+"\."([^"]+)" AS "([^"]+)"/);
+const joinMatch = reversedSql.match(/INNER JOIN "[^"]+"\."([^"]+)" AS "([^"]+)"/);
+assert(!!fromMatch && !!joinMatch, 'SQL has both FROM and JOIN clauses');
+if (fromMatch && joinMatch) {
+	assert(fromMatch[1] !== joinMatch[1], 'FROM table != JOIN table (no duplicate-table self-join)');
+	assert(fromMatch[2] !== joinMatch[2], 'FROM alias != JOIN alias (no duplicate-alias)');
+}
+
 // ── 8. Fanout refusal — sums across one_to_many would double-count ────────
 
 const fanoutScope: AgentScope = {

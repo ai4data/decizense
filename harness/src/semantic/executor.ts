@@ -54,8 +54,15 @@ export async function runMetricQuery(
 	// ── Governance gate ──────────────────────────────────────────────
 	const governance = await evaluateGovernance({
 		authContext,
+		// Pass the compiled SQL so OPA gets the parsed structure for
+		// defence in depth, but tag the tool explicitly so policies that
+		// branch on tool_name (e.g. "query_metrics may compute PII counts
+		// when query_data may not") are routed correctly. Without
+		// tool_name, the governance heuristic would classify any SQL-
+		// bearing call as query_data.
 		sql: compiled.sql,
 		metric_refs: planned.measures.map((m) => m.ref),
+		tool_name: 'query_metrics',
 	});
 	if (!governance.allowed) {
 		throw new SemanticError('governance_blocked', governance.reason ?? 'Governance blocked the metric query.', {
