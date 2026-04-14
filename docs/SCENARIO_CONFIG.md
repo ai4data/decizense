@@ -21,11 +21,15 @@ starting the server.
     semantic_model.yml           required   measures + dimensions
     business_rules.yml           required   rules (with optional `check`)
     signals.yml                  optional   process-signal definitions
+    events.yml                   optional   event-log schema + correlation keys
 ```
 
-Only `signals.yml` is optional. Scenarios without it simply don't
-support `get_process_signals`; the tool returns a structured
-`unsupported` response listing the configured signals (none).
+`signals.yml` and `events.yml` are both optional. Scenarios without
+`signals.yml` simply don't support `get_process_signals`; the tool
+returns a structured `unsupported` response listing the configured
+signals (none). Scenarios without `events.yml` don't support
+`ingest_event` or `get_case_timeline`; those tools return the same
+kind of structured `unsupported` response.
 
 ## `semantics/signals.yml`
 
@@ -75,6 +79,47 @@ signals:
         "configured_signals": [{ "name": "...", "description": "...", "params": [...] }]
     }
     ```
+
+## `semantics/events.yml`
+
+Declares the scenario's event-log table and the correlation keys
+stamped on each event. Read by `ingest_event` (which assembles its
+INSERT from the declared columns) and by `get_case_timeline` (which
+filters by a chosen correlation key). The harness contains no
+travel-shaped column names; everything below is data.
+
+```yaml
+table: events # required — event-log table
+type_column: event_type # required — string discriminator column
+timestamp_column: timestamp # required — event time column
+metadata_column: metadata # optional — JSONB column for ingest_event payloads
+id_column: event_id # optional — primary-key column returned by ingest_event
+
+correlation_keys: # required — at least one
+    - name: booking_id # caller-visible argument name
+      column: booking_id # database column name (usually === name)
+      kind: int # 'int' | 'string'
+      description: Booking / case identifier — primary correlation for process mining.
+    - name: customer_id
+      column: customer_id
+      kind: int
+```
+
+### Rules
+
+- **`correlation_keys` is the contract.** `ingest_event` accepts only
+  declared key names in its `correlations` map; unknown keys are
+  rejected with a structured error listing the legal options. Missing
+  keys are stored as SQL NULL.
+- **`get_case_timeline`** takes `case_key` + `case_id`. `case_key`
+  must match a declared correlation key by name; otherwise the call
+  returns `status: error` with `available_case_keys` echoed back.
+- **Type coercion** runs against `kind`. An int-keyed case rejects
+  non-numeric strings before the SQL is built — typos surface as a
+  structured `status: error` with `expected_kind`, not a database
+  error.
+- **No string interpolation into SQL.** Both tools assemble SQL from
+  the column names you declared and bind values via pg placeholders.
 
 ## `semantics/business_rules.yml` — the `check` field
 
