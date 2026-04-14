@@ -197,6 +197,33 @@ This is deliberate. Scenario choice is a deployment concern; a silent
 default risked a production harness booting as the travel demo if
 someone forgot to set it.
 
+## Dev convenience — `harness/.env.harness-dev`
+
+`SCENARIO_PATH` is mandatory, but requiring every contributor to export
+it manually before `npm run dev` is needlessly abrasive. The `harness/`
+workspace ships a small env file at `harness/.env.harness-dev` with
+default values suitable for local development (travel scenario, HTTP
+transport, localhost:9080, insecure config-only auth). `package.json`
+wires it into the dev/start scripts via Node's `--env-file` flag:
+
+```json
+"scripts": {
+  "dev":   "tsx --env-file=.env.harness-dev watch src/server.ts",
+  "start": "tsx --env-file=.env.harness-dev src/server.ts"
+}
+```
+
+From `harness/`:
+
+```bash
+npm run dev
+```
+
+…now Just Works, and matches what `scripts/dev-all.ps1` sets when run
+from the repo root. Production deployments continue to pass
+`SCENARIO_PATH` through their own environment and never touch this
+file.
+
 ## Authoring a new scenario — checklist
 
 1. Copy the layout above into a new directory.
