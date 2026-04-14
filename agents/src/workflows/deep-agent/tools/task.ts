@@ -37,6 +37,8 @@ export function createTaskTool(opts: { state: DeepAgentState; sessionId: string;
 		execute: async ({ description, subagent_type }) => {
 			const turn = opts.state.turn;
 			const stepName = `task_${opts.state.taskResults.length}_${subagent_type}`;
+			const preview = description.length > 100 ? description.slice(0, 97) + '...' : description;
+			console.log(`\n🎯 task(${subagent_type}) — ${preview}`);
 			const result = await DBOS.runStep(
 				async () => opts.runner(subagent_type as AllowedSubagent, description, opts.sessionId),
 				{ name: stepName },
@@ -47,6 +49,8 @@ export function createTaskTool(opts: { state: DeepAgentState; sessionId: string;
 				answer: result.answer,
 				turn,
 			});
+			const answerPreview = result.answer.length > 120 ? result.answer.slice(0, 117) + '...' : result.answer;
+			console.log(`    ↳ ${answerPreview}`);
 			return result.answer;
 		},
 	});

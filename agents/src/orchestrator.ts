@@ -78,16 +78,47 @@ async function main(): Promise<void> {
 			try {
 				const result = await startOrchestratorWorkflow({ workflowId, sessionId, question });
 
-				console.log(`\nPlan: ${result.plan.map((p) => p.id).join(', ')}`);
-				console.log(`Sub-agent results:`);
+				console.log('\n' + '═'.repeat(60));
+				console.log('DEEP-AGENT STATE AT FINALIZE');
+				console.log('═'.repeat(60));
+
+				if (result.todos && result.todos.length > 0) {
+					console.log(`\nTodos (${result.todos.length}):`);
+					for (const t of result.todos) {
+						const mark =
+							t.status === 'completed'
+								? '[x]'
+								: t.status === 'in_progress'
+									? '[~]'
+									: t.status === 'cancelled'
+										? '[-]'
+										: '[ ]';
+						console.log(`  ${mark} ${t.id}: ${t.content}`);
+					}
+				} else {
+					console.log('\nTodos: (none written)');
+				}
+
+				if (result.notes && Object.keys(result.notes).length > 0) {
+					console.log(`\nNotes (${Object.keys(result.notes).length}):`);
+					for (const [title, body] of Object.entries(result.notes)) {
+						const preview = body.length > 80 ? body.slice(0, 77) + '...' : body;
+						console.log(`  • ${title}: ${preview}`);
+					}
+				}
+
+				console.log(`\nTurns: ${result.turns ?? '?'}`);
+				console.log(`Sub-agent tasks: ${result.subagentResults.length}`);
 				for (const r of result.subagentResults) {
 					console.log(`  [${r.agentId}] ${r.answer.substring(0, 100)}${r.answer.length > 100 ? '...' : ''}`);
 				}
+
 				console.log('\n' + '═'.repeat(60));
-				console.log('\n🎯 ORCHESTRATOR DECISION:\n');
+				console.log(`🎯 ORCHESTRATOR DECISION (confidence: ${result.confidence ?? 'n/a'})`);
+				console.log('═'.repeat(60) + '\n');
 				console.log(result.decision);
 				console.log('\n' + '═'.repeat(60));
-				console.log(`\nOutcome stored: ${result.outcomeStored}`);
+				console.log(`Outcome stored: ${result.outcomeStored}`);
 				console.log(`Workflow: ${result.workflowId}`);
 				console.log('✅ Orchestrator workflow completed');
 			} finally {

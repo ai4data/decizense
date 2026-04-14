@@ -14,6 +14,9 @@ export function createWriteNoteTool(state: DeepAgentState) {
 		}),
 		execute: async ({ title, body }) => {
 			state.notes[title] = body;
+			const preview = body.length > 80 ? body.slice(0, 77) + '...' : body;
+			console.log(`\n📝 write_note — ${title}`);
+			console.log(`    ${preview}`);
 			return `Note saved: ${title}`;
 		},
 	});

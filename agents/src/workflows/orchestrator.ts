@@ -63,6 +63,12 @@ export interface OrchestratorWorkflowResult {
 	subagentResults: SubagentResult[];
 	decision: string;
 	outcomeStored: boolean;
+	// Deep-agent loop state exposed for CLI visibility (optional so older
+	// callers still type-check). Populated only by the deep-agent workflow.
+	todos?: Array<{ id: string; content: string; status: string }>;
+	notes?: Record<string, string>;
+	turns?: number;
+	confidence?: 'high' | 'medium' | 'low';
 }
 
 const TOKEN_ENV_MAP: Record<string, string> = {
@@ -341,6 +347,10 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 		subagentResults: state.taskResults.map((r) => ({ agentId: r.subagentType, answer: r.answer })),
 		decision: decisionText,
 		outcomeStored: true,
+		todos: state.todos.map((t) => ({ id: t.id, content: t.content, status: t.status })),
+		notes: { ...state.notes },
+		turns: state.turn,
+		confidence: state.final?.confidence,
 	};
 }
 

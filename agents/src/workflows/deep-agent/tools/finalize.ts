@@ -30,6 +30,7 @@ export function createFinalizeTool(opts: { state: DeepAgentState; recordOutcome:
 				.describe('Short citations like "flight_ops: 115 delayed flights, top reason congestion (29)".'),
 		}),
 		execute: async ({ decision, confidence, evidence }) => {
+			console.log(`\n✅ finalize — confidence=${confidence}, evidence=${evidence.length} citation(s)`);
 			await opts.recordOutcome({ decision, confidence, evidence });
 			opts.state.final = { decision, confidence, evidence };
 			opts.state.finalized = true;

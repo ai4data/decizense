@@ -31,7 +31,12 @@ export function createWriteTodosTool(state: DeepAgentState) {
 				}
 				state.todos = Array.from(byId.values());
 			}
-			return formatTodos(state.todos);
+			const formatted = formatTodos(state.todos);
+			console.log(`\n📋 write_todos (${merge === false ? 'replace' : 'merge'}) — ${state.todos.length} item(s)`);
+			for (const line of formatted.split('\n')) {
+				console.log(`    ${line}`);
+			}
+			return formatted;
 		},
 	});
 }
