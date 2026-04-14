@@ -1,0 +1,33 @@
+rules:
+    - name: widget_revenue_excludes_refunded
+      category: revenue
+      severity: error
+      description: Widget revenue calculations must exclude refunded orders.
+      applies_to: [orders.total_order_amount]
+      guidance: Filter by status != 'refunded' when summing order_amount.
+      check:
+          kind: sql_pattern
+          applies_when:
+              require_any: [order_amount]
+          require:
+              require_all: [refunded]
+          message: 'Query sums order_amount without filtering refunded orders.'
+
+    - name: widget_pii_blocked
+      category: privacy
+      severity: error
+      description: Customer PII (email, phone) must never appear in widget queries.
+      applies_to: [customers.customer_email]
+      guidance: Use customer_id only.
+      check:
+          kind: pii_columns
+          message: 'Query references PII columns declared in policy.yml.'
+
+    - name: widget_eu_export_manual
+      category: compliance
+      severity: warning
+      description: EU-exported widgets must carry a CE declaration.
+      applies_to: [widgets.eu_exports]
+      guidance: Check CE declaration database before approving EU shipments.
+      # Deliberately no `check` block — this rule should surface as
+      # manual-verification-needed to exercise that path.

@@ -1,0 +1,19 @@
+agents:
+    widgets_agent:
+        display_name: Widgets Agent
+        description: Manages widget catalogue and orders.
+        role: domain
+        bundle: widgets-ops
+        can_query: true
+        identity:
+            catalog_bot: widgets-agent
+            token_env: WIDGETS_TOKEN
+        system_prompt: |
+            You are the Widgets Agent. You have access to widgets and orders.
+
+inter_agent:
+    data_sharing: aggregated_only
+    pii_in_findings: stripped
+    max_agents_per_session: 4
+    max_llm_calls_per_agent: 10
+    cost_limit_per_decision: 0.50

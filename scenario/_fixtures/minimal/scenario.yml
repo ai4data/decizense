@@ -1,0 +1,20 @@
+name: minimal
+display_name: Minimal Non-Travel Fixture
+description: >
+    A tiny scenario used by scenario-driven harness tests. Deliberately
+    non-travel-shaped (widgets + orders) to prove no travel semantics
+    leak into the harness runtime. Not intended to be runnable against
+    a real database — only YAML loading and pure-evaluator paths are
+    exercised.
+domain: test
+database:
+    type: postgres
+    host: localhost
+    port: 5432
+    name: minimal_db
+    user: test
+    password: test
+
+auth:
+    mode: config-only
+    trust_domain: test.local

@@ -1,0 +1,18 @@
+signals:
+    - name: order_status_distribution
+      description: Distribution of order statuses over a recent window.
+      required_tables: [orders]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          SELECT status, COUNT(*) as count
+          FROM orders
+          WHERE created_at >= NOW() - $1::interval
+          GROUP BY status
+          ORDER BY count DESC
+          LIMIT 20
