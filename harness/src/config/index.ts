@@ -266,6 +266,47 @@ export interface SignalsConfig {
 	signals: SignalDefinition[];
 }
 
+/**
+ * Event-log schema declared by a scenario. Describes the events table
+ * the harness writes to (ingest_event) and reads from (get_case_timeline
+ * / get_process_signals' SQL templates).
+ *
+ * Everything here is data. Travel's events table has booking_id /
+ * flight_id / customer_id / ticket_id correlation keys, but the harness
+ * never names those — it reads them from this config.
+ */
+export interface EventSchemaConfig {
+	/** Fully qualified or unqualified table name that stores events. */
+	table: string;
+	/** Column storing the event type (string discriminator). */
+	type_column: string;
+	/** Column storing the event timestamp (timestamptz or timestamp). */
+	timestamp_column: string;
+	/**
+	 * Optional metadata JSONB column. If declared, ingest_event will
+	 * write metadata into it; if absent, metadata is ignored silently.
+	 */
+	metadata_column?: string;
+	/**
+	 * Correlation keys — the "foreign-key-ish" columns stamped on each
+	 * event so case timelines can be reconstructed. Order matters only
+	 * for human readability; the harness treats them as a set.
+	 */
+	correlation_keys: EventCorrelationKey[];
+	/** Name of the primary-key column returned by ingest_event. Optional. */
+	id_column?: string;
+}
+
+export interface EventCorrelationKey {
+	/** Caller-visible argument name (e.g. "booking_id"). */
+	name: string;
+	/** Database column name (usually === name). */
+	column: string;
+	/** int → pg integer, string → pg text. */
+	kind: 'int' | 'string';
+	description?: string;
+}
+
 export interface SemanticMeasure {
 	name: string;
 	column: string;
@@ -393,6 +434,18 @@ export class ScenarioLoader {
 		if (!existsSync(path)) return [];
 		const data = loadYaml<SignalsConfig>(path);
 		return data.signals ?? [];
+	}
+
+	/**
+	 * Scenario-supplied event-log schema. `null` when the scenario has
+	 * no events.yml — in that case the event-layer tools (ingest_event,
+	 * get_case_timeline) report `unsupported` instead of silently using
+	 * travel-shaped columns.
+	 */
+	get eventSchema(): EventSchemaConfig | null {
+		const path = join(this.scenarioPath, 'semantics', 'events.yml');
+		if (!existsSync(path)) return null;
+		return loadYaml<EventSchemaConfig>(path);
 	}
 
 	/**

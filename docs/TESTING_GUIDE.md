@@ -525,7 +525,7 @@ Expected: congestion (29, avg 48 min), crew (22), late_aircraft (22), weather (1
 
 ```bash
 echo '...(initialize)...
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_case_timeline","arguments":{"booking_id":65637}}}' | SCENARIO_PATH=../scenario/travel npx tsx src/server.ts 2>/dev/null
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_case_timeline","arguments":{"case_key":"booking_id","case_id":65637}}}' | SCENARIO_PATH=../scenario/travel npx tsx src/server.ts 2>/dev/null
 ```
 
 Expected: 5-step timeline: BookingCreated → PaymentSucceeded → TicketIssued → ...

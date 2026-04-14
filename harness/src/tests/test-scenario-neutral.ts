@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ScenarioLoader, type BusinessRule } from '../config/index.js';
 import { evaluateRule } from '../governance/rule-check.js';
+import { bindSignalParams } from '../tools/event.js';
 
 interface Assertion {
 	ok: boolean;
@@ -59,7 +60,11 @@ assert(
 	'travel signals are the four previously-hardcoded ones (now data)',
 	`got: ${travelSignals.join(',')}`,
 );
-assertEqual(minimalSignals.join(','), 'order_status_distribution', 'minimal signals are non-travel');
+assertEqual(
+	minimalSignals.join(','),
+	'order_status_distribution,order_status_for_widget',
+	'minimal signals are non-travel',
+);
 assert(
 	!minimalSignals.includes('delay_patterns'),
 	'minimal scenario does NOT inherit travel signals — no travel leakage',
@@ -172,7 +177,55 @@ if (widgetEuRule) {
 	);
 }
 
-// ── 6. Travel rule does NOT apply to minimal SQL (no leakage) ──────────────
+// ── 6. Event schema is scenario-scoped (Fix #1) ────────────────────────────
+const travelEvents = travel.eventSchema;
+const minimalEvents = minimal.eventSchema;
+
+assert(!!travelEvents, 'travel has an event schema');
+assert(!!minimalEvents, 'minimal has an event schema');
+if (travelEvents && minimalEvents) {
+	const travelKeys = travelEvents.correlation_keys
+		.map((k) => k.name)
+		.sort()
+		.join(',');
+	const minimalKeys = minimalEvents.correlation_keys
+		.map((k) => k.name)
+		.sort()
+		.join(',');
+	assertEqual(travelKeys, 'booking_id,customer_id,flight_id,ticket_id', 'travel correlation keys');
+	assertEqual(minimalKeys, 'order_id,widget_id', 'minimal correlation keys (no travel leakage)');
+	assert(
+		!minimalEvents.correlation_keys.some((k) => k.name === 'booking_id' || k.name === 'flight_id'),
+		'minimal event schema does NOT inherit travel correlation keys',
+	);
+}
+
+// ── 7. Optional signal params: omitted + no default = NULL (Fix #2) ────────
+const optionalSignal = minimal.signals.find((s) => s.name === 'order_status_for_widget');
+assert(!!optionalSignal, 'minimal has order_status_for_widget signal');
+if (optionalSignal) {
+	const widget = optionalSignal.params.find((p) => p.name === 'widget_id');
+	assert(!!widget, 'order_status_for_widget declares widget_id param');
+	assert(widget?.required === false, 'widget_id is optional');
+	assert(widget?.default === undefined, 'widget_id has no default');
+	// Direct binder exercise: omitted + no default = bind SQL NULL.
+	const bound = bindSignalParams(optionalSignal, {});
+	if ('error' in bound) {
+		assert(false, 'bindSignalParams errored on omitted optional param — Fix #2 regression', bound.error);
+	} else {
+		assertEqual(bound.values.length, 1, 'one placeholder bound');
+		assertEqual(bound.values[0], null, 'omitted optional param binds SQL NULL (Fix #2)');
+	}
+	// Providing the value still works.
+	const boundProvided = bindSignalParams(optionalSignal, { widget_id: 42 });
+	if ('error' in boundProvided) {
+		assert(false, 'bindSignalParams errored with a provided int', boundProvided.error);
+	} else {
+		assertEqual(boundProvided.values[0], 42, 'provided int binds through normally');
+	}
+}
+
+// ── 8. Travel rule does NOT apply to minimal SQL (no leakage) ──────────────
 if (revenueRule) {
 	const out = evaluateRule(revenueRule, {
 		sql: 'SELECT SUM(order_amount) FROM public.orders', // minimal-shaped SQL
