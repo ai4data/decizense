@@ -1,0 +1,37 @@
+signals:
+    - name: order_status_distribution
+      description: Distribution of order statuses over a recent window.
+      required_tables: [orders]
+      params:
+          - name: time_range_days
+            kind: int
+            required: false
+            default: 30
+            max: 365
+            as_interval_days: true
+      sql: |
+          SELECT status, COUNT(*) as count
+          FROM orders
+          WHERE created_at >= NOW() - $1::interval
+          GROUP BY status
+          ORDER BY count DESC
+          LIMIT 20
+
+    # Exercises the Fix #2 path: an optional param with no default.
+    # If bindSignalParams erroneously coerced `undefined`, this would
+    # fail. The scenario-neutrality test verifies the NULL-binding
+    # behaviour without executing the SQL.
+    - name: order_status_for_widget
+      description: Order status counts, optionally narrowed to a widget.
+      required_tables: [orders]
+      params:
+          - name: widget_id
+            kind: int
+            required: false
+      sql: |
+          SELECT status, COUNT(*) as count
+          FROM orders
+          WHERE $1::int IS NULL OR widget_id = $1::int
+          GROUP BY status
+          ORDER BY count DESC
+          LIMIT 20

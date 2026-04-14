@@ -1,0 +1,15 @@
+table: events
+type_column: event_type
+timestamp_column: ts
+metadata_column: metadata
+id_column: event_id
+
+correlation_keys:
+    - name: order_id
+      column: order_id
+      kind: int
+      description: Order / case identifier for process mining.
+    - name: widget_id
+      column: widget_id
+      kind: int
+      description: Widget identifier.

@@ -92,6 +92,13 @@ rules:
       guidance: >
           For delays > 180 minutes on EU-originating flights, calculate compensation:
           €250 for flights < 1500km, €400 for 1500-3500km, €600 for > 3500km.
+      check:
+          kind: text_pattern
+          applies_when:
+              require_all: [compensation, delay]
+          require:
+              require_any: ['3 hour', '180 min']
+          message: 'Compensation discussed but EU-261 3-hour threshold not referenced.'
       rationale:
           source: regulation
           reference: 'EU-261/2004 Article 7'
@@ -119,6 +126,13 @@ rules:
       description: Revenue calculations must exclude cancelled bookings.
       applies_to: [bookings.total_revenue, bookings.avg_booking_value]
       guidance: Always filter by status != 'cancelled' when computing revenue metrics.
+      check:
+          kind: sql_pattern
+          applies_when:
+              require_any: [total_amount]
+          require:
+              require_all: [cancelled]
+          message: 'Query touches total_amount but does not filter on cancelled status.'
       rationale:
           source: incident
           reference: 'INC-2025-0234'
@@ -146,6 +160,9 @@ rules:
       description: Customer personal data (name, email, phone) must never appear in query results or agent findings.
       applies_to: [bookings.total_bookings]
       guidance: Use customer_id for identification. Never query first_name, last_name, email, or phone columns.
+      check:
+          kind: pii_columns
+          message: 'Query references PII columns declared in policy.yml (pii.columns).'
       rationale:
           source: regulation
           reference: 'GDPR Article 5(1)(c)'

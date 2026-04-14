@@ -11,6 +11,39 @@ import { executeQuery } from '../database/index.js';
 import { ScenarioLoader } from '../config/index.js';
 import { getCatalogClient } from '../catalog/index.js';
 import { getCurrentAuthContext } from '../auth/context.js';
+import { evaluateRule } from '../governance/rule-check.js';
+
+/**
+ * Extract bare table names from a SQL string (FROM / JOIN tokens).
+ * Lowercased; schema prefix stripped. Matches the pattern used by
+ * the bundle_scope check.
+ */
+function extractTables(sql: string): Set<string> {
+	const found = new Set<string>();
+	const re = /(?:FROM|JOIN)\s+([a-z_][a-z0-9_.]*)/gi;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(sql)) !== null) {
+		const t = m[1].toLowerCase();
+		found.add(t.replace(/^public\./, ''));
+	}
+	return found;
+}
+
+/**
+ * Does this rule's domain (applies_to: ["table.measure_or_dimension"])
+ * overlap with the current query? Also considers the result text so
+ * text_pattern rules still fire on narrative-only inspections.
+ */
+function ruleInScope(applies_to: string[], queryTables: Set<string>, resultLower: string): boolean {
+	if (!applies_to || applies_to.length === 0) return false;
+	for (const ref of applies_to) {
+		const table = ref.split('.')[0]?.toLowerCase() ?? '';
+		if (!table) continue;
+		if (queryTables.has(table)) return true;
+		if (resultLower.includes(table)) return true;
+	}
+	return false;
+}
 
 let loader: ScenarioLoader | null = null;
 
@@ -68,45 +101,67 @@ export function registerVerifyTools(server: McpServer) {
 			}
 
 			// Check 2: Were applicable business rules respected?
+			// Driven entirely by each rule's declared `check` metadata —
+			// no hardcoded rule names, no travel-specific pattern logic.
 			const allRules = loader.businessRules;
+			const piiColumnFqns = loader.getPiiColumns();
+			const piiColumnNames = new Set(Array.from(piiColumnFqns).map((f) => f.split('.').pop() ?? f));
+			const manualRules: string[] = [];
+
+			// Scope rules to the current query by intersecting rule.applies_to
+			// with the tables actually referenced in the SQL + the result
+			// text. Rules whose domain isn't in scope don't surface at all —
+			// avoids global noise (reviewer Finding #3).
+			const queryTables = extractTables(sql_used ?? '');
 			const resultLower = result_summary.toLowerCase();
-			const sqlLower = (sql_used ?? '').toLowerCase();
 
 			for (const rule of allRules) {
 				if (rule.severity !== 'error') continue;
-				// Check if rule's domain appears in the result/SQL
-				const ruleTable = rule.applies_to[0]?.split('.')[0]?.toLowerCase() ?? '';
-				if (sqlLower.includes(ruleTable) || resultLower.includes(ruleTable)) {
-					// Rule is relevant — check for known violations
-					if (
-						rule.name === 'revenue_excludes_cancelled' &&
-						sqlLower.includes('total_amount') &&
-						!sqlLower.includes('cancelled')
-					) {
-						checks.push({
-							check: 'rule_compliance',
-							passed: false,
-							detail: `Rule violated: ${rule.name} — query includes total_amount but does not filter cancelled bookings`,
-						});
-						warnings.push(rule.guidance);
-					} else if (rule.name === 'pii_customer_data' && /first_name|last_name|email|phone/.test(sqlLower)) {
-						checks.push({
-							check: 'rule_compliance',
-							passed: false,
-							detail: `Rule violated: ${rule.name} — PII columns detected in query`,
-						});
-					} else {
+				if (!ruleInScope(rule.applies_to, queryTables, resultLower)) continue;
+				const result = evaluateRule(rule, {
+					sql: sql_used,
+					resultSummary: result_summary,
+					piiColumnNames,
+				});
+				switch (result.outcome.status) {
+					case 'pass':
 						checks.push({
 							check: 'rule_compliance',
 							passed: true,
-							detail: `Rule ${rule.name} appears respected`,
+							detail: `Rule ${rule.name} respected (${result.outcome.method}).`,
 						});
-					}
+						break;
+					case 'fail':
+						checks.push({
+							check: 'rule_compliance',
+							passed: false,
+							detail: `Rule violated: ${rule.name} — ${result.outcome.message ?? result.outcome.detail}`,
+						});
+						warnings.push(rule.guidance);
+						break;
+					case 'not_applicable':
+						// Silent — the rule simply doesn't apply to this query.
+						break;
+					case 'manual':
+						manualRules.push(rule.name);
+						break;
 				}
 			}
 
-			if (checks.filter((c) => c.check === 'rule_compliance').length === 0) {
-				checks.push({ check: 'rule_compliance', passed: true, detail: 'No applicable rules detected' });
+			if (manualRules.length > 0) {
+				checks.push({
+					check: 'manual_verification_needed',
+					passed: true,
+					detail: `The following error-severity rules have no machine-checkable definition and require manual review: ${manualRules.join(', ')}`,
+				});
+			}
+
+			if (checks.filter((c) => c.check === 'rule_compliance').length === 0 && manualRules.length === 0) {
+				checks.push({
+					check: 'rule_compliance',
+					passed: true,
+					detail: 'No applicable error-severity rules detected.',
+				});
 			}
 
 			const allPassed = checks.every((c) => c.passed);
@@ -149,14 +204,14 @@ export function registerVerifyTools(server: McpServer) {
 					continue;
 				}
 
-				// Check last event timestamp for this table as a proxy for freshness
+				// Check last event timestamp for this table as a proxy for
+				// freshness. We look for event_type values that start with
+				// the capitalised table name (e.g. "Booking*" for bookings,
+				// "Flight*" for flights) — scenario-neutral heuristic.
 				try {
-					const likePattern = `%${tableName.charAt(0).toUpperCase() + tableName.slice(1)}%`;
+					const likePattern = `${tableName.charAt(0).toUpperCase() + tableName.slice(1)}%`;
 					const result = await executeQuery(
-						`SELECT MAX(timestamp) as last_update FROM events
-						 WHERE event_type LIKE $1
-						 OR flight_id IS NOT NULL
-						 LIMIT 1`,
+						`SELECT MAX(timestamp) as last_update FROM events WHERE event_type LIKE $1 LIMIT 1`,
 						[likePattern],
 					);
 					const lastUpdate = result.rows[0] as { last_update: string | null };
@@ -226,37 +281,27 @@ export function registerVerifyTools(server: McpServer) {
 				? allRules.filter((r) => applicable_rules.includes(r.name))
 				: allRules;
 
+			const piiColumnFqns = loader.getPiiColumns();
+			const piiColumnNames = new Set(Array.from(piiColumnFqns).map((f) => f.split('.').pop() ?? f));
 			const violations: Array<{ rule: string; severity: string; description: string }> = [];
-			const resultLower = result_summary.toLowerCase();
+			const manualRules: string[] = [];
 
+			const resultLower = result_summary.toLowerCase();
 			for (const rule of rulesToCheck) {
-				// Check for known inconsistencies
-				if (
-					rule.name === 'revenue_excludes_cancelled' &&
-					resultLower.includes('revenue') &&
-					resultLower.includes('cancel')
-				) {
-					// Could be a violation or could be properly excluded — flag for review
+				// When the caller provided an explicit applicable_rules list,
+				// trust it (they've scoped manually). Otherwise apply the same
+				// applies_to-gate used by verify_result so global rules don't
+				// flood per-query output.
+				if (!applicable_rules && !ruleInScope(rule.applies_to, new Set(), resultLower)) continue;
+				const result = evaluateRule(rule, { resultSummary: result_summary, piiColumnNames });
+				if (result.outcome.status === 'fail') {
 					violations.push({
 						rule: rule.name,
 						severity: rule.severity,
-						description: `Result mentions both revenue and cancelled — verify ${rule.guidance}`,
+						description: result.outcome.message ?? result.outcome.detail,
 					});
-				}
-				if (
-					rule.name === 'compensation_threshold' &&
-					resultLower.includes('compensation') &&
-					resultLower.includes('delay')
-				) {
-					// Check if compensation discussion aligns with 3-hour threshold
-					if (!resultLower.includes('3 hour') && !resultLower.includes('180 min')) {
-						violations.push({
-							rule: rule.name,
-							severity: 'warning',
-							description:
-								'Compensation discussed but 3-hour threshold not mentioned — verify EU-261 compliance',
-						});
-					}
+				} else if (result.outcome.status === 'manual') {
+					manualRules.push(rule.name);
 				}
 			}
 
@@ -270,6 +315,7 @@ export function registerVerifyTools(server: McpServer) {
 								rules_checked: rulesToCheck.length,
 								consistent: violations.length === 0,
 								violations,
+								manual_verification_needed: manualRules,
 							},
 							null,
 							2,

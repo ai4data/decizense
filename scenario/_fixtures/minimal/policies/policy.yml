@@ -1,0 +1,25 @@
+defaults:
+    max_rows: 100
+    max_query_execution_time_seconds: 10
+
+pii:
+    columns:
+        public.customers:
+            - customer_email
+            - customer_phone
+
+freshness: {}
+
+action_risk: {}
+
+agent_limits:
+    max_query_execution_time_seconds: 10
+
+autonomy:
+    enabled: false
+    thresholds:
+        low_auto_after_decisions: 50
+        medium_auto_after_decisions: 200
+        high_auto_after_decisions: 1000
+        critical_auto_after_decisions: 9999
+        max_error_rate_for_promotion: 0.02

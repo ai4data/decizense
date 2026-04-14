@@ -63,6 +63,14 @@ This now verifies end-to-end without manual harness startup:
 
 ## Prerequisites
 
+> The harness now requires `SCENARIO_PATH` to be set explicitly — it no
+> longer defaults to the travel scenario. The scripts below (`smoke-test.sh`,
+> `dev-all.ps1`, `verify-phase-*.sh`, `test-crash-recovery.sh`) all export
+> `SCENARIO_PATH=../scenario/travel` before starting the harness, so you
+> don't need to set it yourself when using them. If you start the harness
+> manually, `export SCENARIO_PATH=../scenario/travel` first. See
+> [SCENARIO_CONFIG.md](./SCENARIO_CONFIG.md) for the full contract.
+
 Ensure all core services are running:
 
 **Linux / macOS / WSL:**
@@ -517,7 +525,7 @@ Expected: congestion (29, avg 48 min), crew (22), late_aircraft (22), weather (1
 
 ```bash
 echo '...(initialize)...
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_case_timeline","arguments":{"booking_id":65637}}}' | SCENARIO_PATH=../scenario/travel npx tsx src/server.ts 2>/dev/null
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_case_timeline","arguments":{"case_key":"booking_id","case_id":65637}}}' | SCENARIO_PATH=../scenario/travel npx tsx src/server.ts 2>/dev/null
 ```
 
 Expected: 5-step timeline: BookingCreated → PaymentSucceeded → TicketIssued → ...

@@ -41,7 +41,7 @@ import {
 import { registerContextTools, initContextTools } from './tools/context.js';
 import { registerControlTools, initControlTools } from './tools/control.js';
 import { registerActionTools, initActionTools } from './tools/action.js';
-import { registerEventTools } from './tools/event.js';
+import { registerEventTools, initEventTools } from './tools/event.js';
 import { registerPersistTools, initPersistTools } from './tools/persist.js';
 import { registerVerifyTools, initVerifyTools } from './tools/verify.js';
 import { registerAdminTools, initAdminTools } from './tools/admin.js';
@@ -52,7 +52,15 @@ import { initDbos, shutdownDbos } from './workflows/dbos-init.js';
 // ─── Shared init ───────────────────────────────────────────────────────────
 
 async function initializeSharedState(): Promise<ScenarioLoader> {
-	const scenarioPath = process.env.SCENARIO_PATH || '../scenario/travel';
+	const scenarioPath = process.env.SCENARIO_PATH;
+	if (!scenarioPath || scenarioPath.trim() === '') {
+		console.error(
+			'[harness] Fatal: SCENARIO_PATH environment variable is required. ' +
+				'Point it at a scenario directory, e.g. SCENARIO_PATH=../scenario/travel. ' +
+				'The harness no longer defaults to the travel scenario implicitly — scenario choice is a deployment concern, not a fallback.',
+		);
+		process.exit(2);
+	}
 	console.error(`[harness] Loading scenario from: ${scenarioPath}`);
 
 	const loader = new ScenarioLoader(scenarioPath);
@@ -98,6 +106,7 @@ async function initializeSharedState(): Promise<ScenarioLoader> {
 	initContextTools(scenarioPath);
 	initControlTools(scenarioPath);
 	initActionTools(scenarioPath);
+	initEventTools(scenarioPath);
 	initPersistTools(scenarioPath);
 	initVerifyTools(scenarioPath);
 	initAdminTools(scenarioPath);

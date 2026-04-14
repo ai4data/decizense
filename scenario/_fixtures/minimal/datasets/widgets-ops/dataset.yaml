@@ -1,0 +1,15 @@
+bundle_id: widgets-ops
+display_name: Widgets Operations
+description: Widgets + orders, no customer PII.
+owner: test-team
+certification: gold
+
+tables:
+    - schema: public
+      table: widgets
+    - schema: public
+      table: orders
+
+joins:
+    - left: { schema: public, table: widgets, column: widget_id }
+      right: { schema: public, table: orders, column: widget_id }

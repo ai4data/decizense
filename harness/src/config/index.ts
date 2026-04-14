@@ -167,6 +167,144 @@ export interface BusinessRule {
 		author?: string;
 		date?: string;
 	};
+	/**
+	 * Optional machine-checkable definition. If absent, verify_result /
+	 * check_consistency will report `manual-verification-needed` rather
+	 * than hardcoding travel-specific rule-name string matches.
+	 */
+	check?: RuleCheck;
+}
+
+/**
+ * A RuleCheck tells the verify tools how to detect compliance or
+ * violation of this rule mechanically. Several kinds are supported so
+ * scenario authors can express rules in whichever shape fits best.
+ */
+/** Shared pattern-set shape used by sql_pattern and text_pattern checks. */
+export interface PatternSet {
+	/** All tokens must be present (case-insensitive substring match). */
+	require_all?: string[];
+	/** At least one token must be present. */
+	require_any?: string[];
+	/** None of these tokens may be present. */
+	forbid_any?: string[];
+}
+
+export type RuleCheck =
+	| {
+			kind: 'sql_pattern';
+			/**
+			 * Gate: only evaluate require/forbid if the SQL matches this
+			 * pattern-set. If applies_when is absent the check always
+			 * applies. If applies_when doesn't match, the check reports
+			 * `not_applicable` — neither pass nor fail.
+			 */
+			applies_when?: PatternSet;
+			/** Conjunction of constraints on the SQL (lowercased). */
+			require?: PatternSet;
+			message?: string;
+	  }
+	| {
+			kind: 'text_pattern';
+			/** Same semantics as sql_pattern but the target is result_summary. */
+			applies_when?: PatternSet;
+			require?: PatternSet;
+			message?: string;
+	  }
+	| {
+			kind: 'pii_columns';
+			/** Rejects if the SQL references any column in scope.blocked_columns (policy-driven). */
+			message?: string;
+	  }
+	| {
+			kind: 'query_result';
+			/** Harness-executed query; result must satisfy `expect` to pass. */
+			sql: string;
+			expect: { column: string; op: '==' | '!=' | '<' | '<=' | '>' | '>='; value: number | string };
+			message?: string;
+	  }
+	| {
+			kind: 'manual';
+			message?: string;
+	  };
+
+/**
+ * Process-signal definition — scenario-provided SQL template that the
+ * harness dispatches on via tools/event.ts. Keeps the harness free of
+ * travel-specific event names and table references.
+ */
+export interface SignalDefinition {
+	name: string;
+	description: string;
+	/**
+	 * SQL template. Uses pg parameter placeholders ($1, $2, ...) bound
+	 * in the order of `params`. No string substitution of runtime values
+	 * into the SQL text is permitted — prevents injection.
+	 */
+	sql: string;
+	/**
+	 * Ordered list of parameters the caller may supply. Each entry maps
+	 * to a pg placeholder ($1 for params[0], $2 for params[1], ...).
+	 */
+	params: SignalParam[];
+	/** Informational only — tables the template reads. */
+	required_tables?: string[];
+}
+
+export interface SignalParam {
+	name: string;
+	kind: 'int' | 'string';
+	required: boolean;
+	default?: number | string;
+	/** For int params, an optional max to bound the scan. */
+	max?: number;
+	/** If present and the caller passes `time_range_days`, format as pg interval. */
+	as_interval_days?: boolean;
+}
+
+export interface SignalsConfig {
+	signals: SignalDefinition[];
+}
+
+/**
+ * Event-log schema declared by a scenario. Describes the events table
+ * the harness writes to (ingest_event) and reads from (get_case_timeline
+ * / get_process_signals' SQL templates).
+ *
+ * Everything here is data. Travel's events table has booking_id /
+ * flight_id / customer_id / ticket_id correlation keys, but the harness
+ * never names those — it reads them from this config.
+ */
+export interface EventSchemaConfig {
+	/** Fully qualified or unqualified table name that stores events. */
+	table: string;
+	/** Column storing the event type (string discriminator). */
+	type_column: string;
+	/** Column storing the event timestamp (timestamptz or timestamp). */
+	timestamp_column: string;
+	/**
+	 * Optional metadata JSONB column. If declared, ingest_event will
+	 * write metadata into it; if absent, metadata is ignored silently.
+	 */
+	metadata_column?: string;
+	/**
+	 * Correlation keys — the "foreign-key-ish" columns stamped on each
+	 * event so case timelines can be reconstructed. Order matters only
+	 * for human readability; the harness treats them as a set.
+	 */
+	correlation_keys: EventCorrelationKey[];
+	/** Name of the primary-key column returned by ingest_event. Optional. */
+	id_column?: string;
+}
+
+export interface EventCorrelationKey {
+	/** Caller-visible argument name (e.g. "booking_id"). */
+	name: string;
+	/** Database column name (usually === name). */
+	column: string;
+	/** int → pg integer, string → pg text. */
+	kind: 'int' | 'string';
+	description?: string;
 }
 
 export interface SemanticMeasure {
@@ -284,6 +422,30 @@ export class ScenarioLoader {
 
 	get semanticModel(): SemanticModel {
 		return loadYaml<SemanticModel>(join(this.scenarioPath, 'semantics', 'semantic_model.yml'));
+	}
+
+	/**
+	 * Scenario-supplied process-signal definitions. Returns an empty
+	 * array (not throw) when the scenario has no signals.yml — the
+	 * harness must degrade to `unsupported` rather than crash.
+	 */
+	get signals(): SignalDefinition[] {
+		const path = join(this.scenarioPath, 'semantics', 'signals.yml');
+		if (!existsSync(path)) return [];
+		const data = loadYaml<SignalsConfig>(path);
+		return data.signals ?? [];
+	}
+
+	/**
+	 * Scenario-supplied event-log schema. `null` when the scenario has
+	 * no events.yml — in that case the event-layer tools (ingest_event,
+	 * get_case_timeline) report `unsupported` instead of silently using
+	 * travel-shaped columns.
+	 */
+	get eventSchema(): EventSchemaConfig | null {
+		const path = join(this.scenarioPath, 'semantics', 'events.yml');
+		if (!existsSync(path)) return null;
+		return loadYaml<EventSchemaConfig>(path);
 	}
 
 	/**

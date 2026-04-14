@@ -1,0 +1,26 @@
+models:
+    - name: widgets
+      table: { schema: public, table: widgets }
+      description: Widget catalogue.
+      dimensions:
+          - name: widget_id
+            column: widget_id
+            description: Widget identifier.
+      measures:
+          - name: total_widgets
+            column: widget_id
+            aggregation: count
+            description: Total widget count.
+
+    - name: orders
+      table: { schema: public, table: orders }
+      description: Orders for widgets.
+      dimensions:
+          - name: status
+            column: status
+            description: Order status.
+      measures:
+          - name: total_orders
+            column: order_id
+            aggregation: count
+            description: Total order count.

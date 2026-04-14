@@ -2,19 +2,151 @@
  * LAYER 3: OPERATIONAL/EVENT tools
  *
  * The event log is the append-only source of truth for what happened.
- * Each booking is a process instance (case_id = booking_id).
+ * Which column identifies a "case" (the process instance) is scenario-
+ * defined — see <scenario>/semantics/events.yml > correlation_keys.
+ * For the travel scenario the case key is booking_id; for a finance
+ * scenario it might be transaction_id; for healthcare, encounter_id.
+ * The harness stays neutral.
  *
  * These tools provide:
- * - Event ingestion (append new events)
- * - Case timelines (full lifecycle of a booking)
- * - Process signals (bottlenecks, patterns, anomalies)
+ * - Event ingestion (append new events with scenario-declared keys)
+ * - Case timelines (chronological event stream for one case_id)
+ * - Process signals (bottlenecks, patterns, anomalies — scenario SQL)
  *
  * Process signals feed Layer 4 (Decision) as evidence for proposals.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import {
+	ScenarioLoader,
+	type EventCorrelationKey,
+	type EventSchemaConfig,
+	type SignalDefinition,
+	type SignalParam,
+} from '../config/index.js';
 import { executeQuery } from '../database/index.js';
+
+let loader: ScenarioLoader | null = null;
+
+export function initEventTools(scenarioPath: string) {
+	loader = new ScenarioLoader(scenarioPath);
+}
+
+/**
+ * Bind caller-provided arguments to a signal's declared params, in the
+ * declared order, applying defaults and lightweight validation. Returns
+ * the values ready to pass to pg as positional placeholders — or an
+ * error string if validation fails. No SQL text manipulation happens
+ * here; the template is used verbatim.
+ */
+export function bindSignalParams(
+	def: SignalDefinition,
+	args: Record<string, unknown>,
+): { values: unknown[] } | { error: string } {
+	const values: unknown[] = [];
+	for (const p of def.params) {
+		const raw = args[p.name];
+		const provided = raw !== undefined && raw !== null;
+
+		if (!provided) {
+			if (p.required && p.default === undefined) {
+				return { error: `Missing required parameter "${p.name}" for signal "${def.name}"` };
+			}
+			if (p.default === undefined) {
+				// Truly optional with no default — bind SQL NULL rather than
+				// trying to coerce undefined (which would always error). The
+				// scenario-authored template is responsible for handling a
+				// NULL bind (e.g. COALESCE($N, default_expr)).
+				values.push(null);
+				continue;
+			}
+		}
+
+		const val = provided ? raw : p.default;
+		const bound = coerceParam(p, val);
+		if ('error' in bound) return bound;
+		values.push(bound.value);
+	}
+	return { values };
+}
+
+function jsonContent(payload: unknown) {
+	return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
+}
+
+function getEventSchemaOrError(): { value: EventSchemaConfig } | { status: 'unsupported'; reason: string } {
+	if (!loader) {
+		return { status: 'unsupported', reason: 'Event tools called before initialisation' };
+	}
+	const schema = loader.eventSchema;
+	if (!schema) {
+		return {
+			status: 'unsupported',
+			reason: 'No events schema for this scenario. Add <scenario>/semantics/events.yml with table, type_column, timestamp_column, and correlation_keys.',
+		};
+	}
+	return { value: schema };
+}
+
+function bindCorrelations(
+	schema: EventSchemaConfig,
+	args: Record<string, unknown>,
+): { values: Record<string, unknown> } | { error: string } {
+	const known = new Set(schema.correlation_keys.map((k) => k.name));
+	for (const k of Object.keys(args)) {
+		if (!known.has(k)) {
+			return { error: `Unknown correlation key "${k}". Declared keys: ${[...known].join(', ')}` };
+		}
+	}
+	const values: Record<string, unknown> = {};
+	for (const key of schema.correlation_keys) {
+		const v = args[key.name];
+		if (v === undefined || v === null) {
+			values[key.name] = null;
+			continue;
+		}
+		const coerced = coerceCorrelation(key, v);
+		if ('error' in coerced) return { error: coerced.error };
+		values[key.name] = coerced.value;
+	}
+	return { values };
+}
+
+function coerceCorrelation(k: EventCorrelationKey, v: unknown): { value: unknown } | { error: string } {
+	if (k.kind === 'int') {
+		const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+		if (!Number.isFinite(n) || !Number.isInteger(n)) {
+			return { error: `Correlation key "${k.name}" must be an integer (got ${JSON.stringify(v)})` };
+		}
+		return { value: n };
+	}
+	if (k.kind === 'string') {
+		if (typeof v !== 'string') return { error: `Correlation key "${k.name}" must be a string` };
+		return { value: v };
+	}
+	return { error: `Unknown correlation kind for "${k.name}"` };
+}
+
+function coerceParam(p: SignalParam, val: unknown): { value: unknown } | { error: string } {
+	if (p.kind === 'int') {
+		const n = typeof val === 'number' ? val : typeof val === 'string' ? Number(val) : NaN;
+		if (!Number.isFinite(n) || !Number.isInteger(n)) {
+			return { error: `Parameter "${p.name}" must be an integer (got ${JSON.stringify(val)})` };
+		}
+		if (p.max !== undefined && n > p.max) {
+			return { error: `Parameter "${p.name}" exceeds max (${p.max})` };
+		}
+		return { value: p.as_interval_days ? `${n} days` : n };
+	}
+	if (p.kind === 'string') {
+		if (typeof val !== 'string') {
+			return { error: `Parameter "${p.name}" must be a string` };
+		}
+		return { value: val };
+	}
+	return { error: `Unknown param kind for "${p.name}"` };
+}
 
 export function registerEventTools(server: McpServer) {
 	/**
@@ -25,142 +157,170 @@ export function registerEventTools(server: McpServer) {
 	 */
 	server.tool(
 		'ingest_event',
-		'Append a new event to the operational event log (append-only, immutable)',
+		'Append a new event to the operational event log (append-only, immutable). Correlation keys are scenario-defined; see events.yml.',
 		{
-			event_type: z.string().describe('Event type (e.g. FlightDelayed, BookingCreated, RebookingInitiated)'),
-			booking_id: z.number().optional().describe('Related booking ID'),
-			flight_id: z.number().optional().describe('Related flight ID'),
-			customer_id: z.number().optional().describe('Related customer ID'),
-			ticket_id: z.number().optional().describe('Related ticket ID'),
+			event_type: z.string().describe('Event type string (scenario-defined discriminator).'),
+			correlations: z
+				.record(z.string(), z.union([z.number(), z.string(), z.null()]))
+				.optional()
+				.describe(
+					'Map of correlation-key names to values. Keys must match entries in the scenario events.yml > correlation_keys. Unknown keys are rejected; missing keys are stored as NULL.',
+				),
 			metadata: z.record(z.string(), z.unknown()).optional().describe('Additional event data as JSON'),
 		},
-		async ({ event_type, booking_id, flight_id, customer_id, ticket_id, metadata }) => {
+		async ({ event_type, correlations, metadata }) => {
 			try {
-				const metaJson = metadata ? JSON.stringify(metadata) : '{}';
-				const result = await executeQuery(
-					`INSERT INTO events (event_type, booking_id, flight_id, customer_id, ticket_id, timestamp, metadata)
-					 VALUES ($1, $2, $3, $4, $5, NOW(), $6::jsonb)
-					 RETURNING event_id, timestamp`,
-					[
-						event_type,
-						booking_id ?? null,
-						flight_id ?? null,
-						customer_id ?? null,
-						ticket_id ?? null,
-						metaJson,
-					],
-				);
+				const schema = getEventSchemaOrError();
+				if ('status' in schema) {
+					return jsonContent(schema);
+				}
+				const binding = bindCorrelations(schema.value, correlations ?? {});
+				if ('error' in binding) {
+					return jsonContent({ status: 'error', reason: binding.error });
+				}
 
-				const row = result.rows[0] as { event_id: number; timestamp: string };
+				const metaCol = schema.value.metadata_column;
+				const columns: string[] = [schema.value.type_column];
+				const placeholders: string[] = ['$1'];
+				const values: unknown[] = [event_type];
+				let idx = 2;
 
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify({
-								event_id: row.event_id,
-								event_type,
-								stored: true,
-								timestamp: row.timestamp,
-							}),
-						},
-					],
-				};
+				for (const key of schema.value.correlation_keys) {
+					columns.push(key.column);
+					placeholders.push(`$${idx}`);
+					values.push(binding.values[key.name] ?? null);
+					idx++;
+				}
+				columns.push(schema.value.timestamp_column);
+				placeholders.push('NOW()');
+				if (metaCol) {
+					columns.push(metaCol);
+					placeholders.push(`$${idx}::jsonb`);
+					values.push(JSON.stringify(metadata ?? {}));
+					idx++;
+				}
+				const returning = schema.value.id_column
+					? `${schema.value.id_column}, ${schema.value.timestamp_column}`
+					: schema.value.timestamp_column;
+
+				const sql = `INSERT INTO ${schema.value.table} (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING ${returning}`;
+				const result = await executeQuery(sql, values);
+				const row = result.rows[0] as Record<string, unknown>;
+
+				return jsonContent({
+					status: 'ok',
+					event_type,
+					stored: true,
+					id: schema.value.id_column ? row[schema.value.id_column] : undefined,
+					timestamp: row[schema.value.timestamp_column],
+				});
 			} catch (err) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify({ error: `Failed to ingest event: ${(err as Error).message}` }),
-						},
-					],
-				};
+				return jsonContent({ status: 'error', reason: `Failed to ingest event: ${(err as Error).message}` });
 			}
 		},
 	);
 
 	/**
-	 * get_case_timeline — Full lifecycle of a booking (process instance).
+	 * get_case_timeline — Full lifecycle of a single case.
 	 *
-	 * Returns all events for a booking_id in chronological order.
-	 * Each booking is a process instance for process mining.
+	 * Returns every event sharing the given correlation-key value, in
+	 * chronological order. The caller chooses which declared key to
+	 * treat as the case identifier (e.g. booking_id for travel,
+	 * transaction_id for finance). Scenario-neutral.
 	 */
 	server.tool(
 		'get_case_timeline',
-		'Get the full event timeline for a booking (process instance)',
+		'Get the full event timeline for a single case (process instance). Case key must match a correlation_keys entry in events.yml.',
 		{
-			booking_id: z.number().describe('Booking ID to get timeline for'),
+			case_key: z.string().describe('Which correlation key identifies the case (e.g. "booking_id" in travel).'),
+			case_id: z.union([z.number(), z.string()]).describe('Identifier value for the case.'),
+			limit: z.number().int().positive().optional().default(100),
 		},
-		async ({ booking_id }) => {
+		async ({ case_key, case_id, limit }) => {
 			try {
-				const result = await executeQuery(
-					`SELECT event_id, event_type, timestamp, flight_id, ticket_id, metadata
-					 FROM events
-					 WHERE booking_id = $1
-					 ORDER BY timestamp ASC
-					 LIMIT 100`,
-					[booking_id],
-				);
+				const schema = getEventSchemaOrError();
+				if ('status' in schema) {
+					return jsonContent(schema);
+				}
+				const keyDef = schema.value.correlation_keys.find((k) => k.name === case_key);
+				if (!keyDef) {
+					return jsonContent({
+						status: 'error',
+						reason: `Unknown case_key "${case_key}" for this scenario.`,
+						available_case_keys: schema.value.correlation_keys.map((k) => k.name),
+					});
+				}
 
-				// Calculate durations between steps
-				const events = result.rows as Array<{
-					event_id: number;
-					event_type: string;
-					timestamp: string;
-					flight_id: number | null;
-					ticket_id: number | null;
-					metadata: Record<string, unknown>;
-				}>;
+				// Coerce case_id against the declared key kind so an int-keyed
+				// case can't be queried with a non-numeric string. Mirrors the
+				// validation ingest_event already applies to correlations.
+				const coerced = coerceCorrelation(keyDef, case_id);
+				if ('error' in coerced) {
+					return jsonContent({
+						status: 'error',
+						reason: coerced.error,
+						case_key,
+						expected_kind: keyDef.kind,
+					});
+				}
+				const caseIdValue = coerced.value;
+
+				const idCol = schema.value.id_column;
+				const tsCol = schema.value.timestamp_column;
+				const typeCol = schema.value.type_column;
+				const metaCol = schema.value.metadata_column;
+
+				const selectCols = [
+					idCol ? `${idCol} AS id` : null,
+					`${typeCol} AS event_type`,
+					`${tsCol} AS ts`,
+					...schema.value.correlation_keys.map((k) => k.column),
+					metaCol ? `${metaCol} AS metadata` : null,
+				]
+					.filter(Boolean)
+					.join(', ');
+
+				const sql = `SELECT ${selectCols} FROM ${schema.value.table} WHERE ${keyDef.column} = $1 ORDER BY ${tsCol} ASC LIMIT $2`;
+				const result = await executeQuery(sql, [caseIdValue, limit]);
+				const events = result.rows as Array<Record<string, unknown>>;
 
 				const timeline = events.map((e, i) => {
-					const prev = i > 0 ? events[i - 1] : null;
-					const durationMs = prev ? new Date(e.timestamp).getTime() - new Date(prev.timestamp).getTime() : 0;
-					const durationMinutes = Math.round(durationMs / 60000);
-
+					const tsNow = e.ts as string;
+					const prev = i > 0 ? (events[i - 1].ts as string) : null;
+					const durationMinutes = prev
+						? Math.round((new Date(tsNow).getTime() - new Date(prev).getTime()) / 60000)
+						: null;
+					const correlations: Record<string, unknown> = {};
+					for (const k of schema.value.correlation_keys) correlations[k.name] = e[k.column];
 					return {
 						step: i + 1,
 						event_type: e.event_type,
-						timestamp: e.timestamp,
-						minutes_since_previous: i > 0 ? durationMinutes : null,
-						flight_id: e.flight_id,
-						ticket_id: e.ticket_id,
-						metadata: e.metadata,
+						timestamp: tsNow,
+						minutes_since_previous: durationMinutes,
+						correlations,
+						...(metaCol ? { metadata: e.metadata } : {}),
 					};
 				});
 
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									booking_id,
-									total_events: timeline.length,
-									timeline,
-									total_duration_minutes:
-										timeline.length > 1
-											? Math.round(
-													(new Date(events[events.length - 1].timestamp).getTime() -
-														new Date(events[0].timestamp).getTime()) /
-														60000,
-												)
-											: 0,
-								},
-								null,
-								2,
-							),
-						},
-					],
-				};
+				const totalDuration =
+					timeline.length > 1
+						? Math.round(
+								(new Date(events[events.length - 1].ts as string).getTime() -
+									new Date(events[0].ts as string).getTime()) /
+									60000,
+							)
+						: 0;
+
+				return jsonContent({
+					status: 'ok',
+					case_key,
+					case_id: caseIdValue,
+					total_events: timeline.length,
+					timeline,
+					total_duration_minutes: totalDuration,
+				});
 			} catch (err) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify({ error: `Failed to get timeline: ${(err as Error).message}` }),
-						},
-					],
-				};
+				return jsonContent({ status: 'error', reason: `Failed to get timeline: ${(err as Error).message}` });
 			}
 		},
 	);
@@ -181,97 +341,67 @@ export function registerEventTools(server: McpServer) {
 		'Analyze event log for operational patterns, bottlenecks, and anomalies',
 		{
 			signal_type: z
-				.enum(['event_distribution', 'failure_rates', 'step_durations', 'delay_patterns'])
-				.describe('Type of signal to compute'),
-			time_range_days: z.number().optional().default(30).describe('Look back N days'),
+				.string()
+				.describe('Name of the signal to compute (scenario-defined; see configured_signals in errors).'),
+			time_range_days: z.number().optional().describe('Look back N days (if the signal accepts this parameter).'),
 		},
-		async ({ signal_type, time_range_days }) => {
+		async (args) => {
 			try {
-				let query: string;
-				let description: string;
-				const intervalParam = `${time_range_days} days`;
-
-				switch (signal_type) {
-					case 'event_distribution':
-						description = 'Distribution of event types in the operational log';
-						query = `
-							SELECT event_type, COUNT(*) as count,
-							       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percentage
-							FROM events
-							WHERE timestamp >= NOW() - $1::interval
-							GROUP BY event_type
-							ORDER BY count DESC
-							LIMIT 20`;
-						break;
-
-					case 'failure_rates':
-						description = 'Payment failure and booking cancellation rates';
-						query = `
-							SELECT
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentFailed'
-							   AND timestamp >= NOW() - $1::interval) as payment_failures,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'PaymentSucceeded'
-							   AND timestamp >= NOW() - $1::interval) as payment_successes,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCancelled'
-							   AND timestamp >= NOW() - $1::interval) as cancellations,
-							  (SELECT COUNT(*) FROM events WHERE event_type = 'BookingCreated'
-							   AND timestamp >= NOW() - $1::interval) as total_bookings`;
-						break;
-
-					case 'step_durations':
-						description = 'Average time between process steps (bottleneck detection)';
-						query = `
-							WITH step_pairs AS (
-							  SELECT
-							    e1.booking_id,
-							    e1.event_type as from_step,
-							    e2.event_type as to_step,
-							    EXTRACT(EPOCH FROM (e2.timestamp - e1.timestamp)) / 60 as minutes
-							  FROM events e1
-							  JOIN events e2 ON e1.booking_id = e2.booking_id
-							    AND e2.timestamp > e1.timestamp
-							    AND e2.event_type IN ('PaymentSucceeded', 'TicketIssued', 'CheckInCompleted', 'BoardingStarted')
-							    AND e1.event_type IN ('BookingCreated', 'PaymentSucceeded', 'TicketIssued', 'CheckInCompleted')
-							  WHERE e1.timestamp >= NOW() - $1::interval
-							    AND NOT EXISTS (
-							      SELECT 1 FROM events e3
-							      WHERE e3.booking_id = e1.booking_id
-							        AND e3.timestamp > e1.timestamp
-							        AND e3.timestamp < e2.timestamp
-							        AND e3.event_type = e2.event_type
-							    )
-							)
-							SELECT from_step, to_step,
-							       ROUND(AVG(minutes)::numeric, 1) as avg_minutes,
-							       ROUND(MIN(minutes)::numeric, 1) as min_minutes,
-							       ROUND(MAX(minutes)::numeric, 1) as max_minutes,
-							       COUNT(*) as sample_size
-							FROM step_pairs
-							WHERE minutes > 0
-							GROUP BY from_step, to_step
-							ORDER BY avg_minutes DESC
-							LIMIT 10`;
-						break;
-
-					case 'delay_patterns':
-						description = 'Flight delay patterns by reason, day of week, and airport';
-						query = `
-							SELECT
-							  fd.reason,
-							  COUNT(*) as delay_count,
-							  ROUND(AVG(fd.delay_minutes)::numeric, 1) as avg_minutes,
-							  ROUND(MAX(fd.delay_minutes)::numeric, 1) as max_minutes,
-							  ROUND(SUM(fd.delay_minutes)::numeric, 0) as total_minutes
-							FROM flight_delays fd
-							JOIN flights f ON fd.flight_id = f.flight_id
-							WHERE fd.reported_at >= NOW() - $1::interval
-							GROUP BY fd.reason
-							ORDER BY delay_count DESC
-							LIMIT 10`;
-						break;
+				if (!loader) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									status: 'error',
+									reason: 'get_process_signals called before tool initialisation',
+								}),
+							},
+						],
+					};
 				}
 
-				const result = await executeQuery(query, [intervalParam]);
+				const signals = loader.signals;
+				const requested = args.signal_type;
+				const def = signals.find((s) => s.name === requested);
+
+				if (!def) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({
+									status: 'unsupported',
+									signal_type: requested,
+									reason: `Signal "${requested}" is not configured for this scenario. Add an entry to <scenario>/semantics/signals.yml.`,
+									configured_signals: signals.map((s) => ({
+										name: s.name,
+										description: s.description,
+										params: s.params.map((p) => ({
+											name: p.name,
+											kind: p.kind,
+											required: p.required,
+										})),
+									})),
+								}),
+							},
+						],
+					};
+				}
+
+				const bound = bindSignalParams(def, args as Record<string, unknown>);
+				if ('error' in bound) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: JSON.stringify({ status: 'error', signal_type: requested, reason: bound.error }),
+							},
+						],
+					};
+				}
+
+				const result = await executeQuery(def.sql, bound.values as unknown[]);
 
 				return {
 					content: [
@@ -279,9 +409,15 @@ export function registerEventTools(server: McpServer) {
 							type: 'text' as const,
 							text: JSON.stringify(
 								{
-									signal_type,
-									description,
-									time_range_days,
+									status: 'ok',
+									signal_type: def.name,
+									description: def.description,
+									params: Object.fromEntries(
+										def.params.map((p, i) => [
+											p.name,
+											(args as Record<string, unknown>)[p.name] ?? p.default,
+										]),
+									),
 									data: result.rows,
 									row_count: result.rowCount,
 								},
@@ -296,7 +432,10 @@ export function registerEventTools(server: McpServer) {
 					content: [
 						{
 							type: 'text' as const,
-							text: JSON.stringify({ error: `Failed to get signals: ${(err as Error).message}` }),
+							text: JSON.stringify({
+								status: 'error',
+								reason: `Failed to get signals: ${(err as Error).message}`,
+							}),
 						},
 					],
 				};
