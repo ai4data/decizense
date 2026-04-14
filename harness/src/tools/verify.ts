@@ -13,6 +13,38 @@ import { getCatalogClient } from '../catalog/index.js';
 import { getCurrentAuthContext } from '../auth/context.js';
 import { evaluateRule } from '../governance/rule-check.js';
 
+/**
+ * Extract bare table names from a SQL string (FROM / JOIN tokens).
+ * Lowercased; schema prefix stripped. Matches the pattern used by
+ * the bundle_scope check.
+ */
+function extractTables(sql: string): Set<string> {
+	const found = new Set<string>();
+	const re = /(?:FROM|JOIN)\s+([a-z_][a-z0-9_.]*)/gi;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(sql)) !== null) {
+		const t = m[1].toLowerCase();
+		found.add(t.replace(/^public\./, ''));
+	}
+	return found;
+}
+
+/**
+ * Does this rule's domain (applies_to: ["table.measure_or_dimension"])
+ * overlap with the current query? Also considers the result text so
+ * text_pattern rules still fire on narrative-only inspections.
+ */
+function ruleInScope(applies_to: string[], queryTables: Set<string>, resultLower: string): boolean {
+	if (!applies_to || applies_to.length === 0) return false;
+	for (const ref of applies_to) {
+		const table = ref.split('.')[0]?.toLowerCase() ?? '';
+		if (!table) continue;
+		if (queryTables.has(table)) return true;
+		if (resultLower.includes(table)) return true;
+	}
+	return false;
+}
+
 let loader: ScenarioLoader | null = null;
 
 export function initVerifyTools(scenarioPath: string) {
@@ -76,8 +108,16 @@ export function registerVerifyTools(server: McpServer) {
 			const piiColumnNames = new Set(Array.from(piiColumnFqns).map((f) => f.split('.').pop() ?? f));
 			const manualRules: string[] = [];
 
+			// Scope rules to the current query by intersecting rule.applies_to
+			// with the tables actually referenced in the SQL + the result
+			// text. Rules whose domain isn't in scope don't surface at all —
+			// avoids global noise (reviewer Finding #3).
+			const queryTables = extractTables(sql_used ?? '');
+			const resultLower = result_summary.toLowerCase();
+
 			for (const rule of allRules) {
 				if (rule.severity !== 'error') continue;
+				if (!ruleInScope(rule.applies_to, queryTables, resultLower)) continue;
 				const result = evaluateRule(rule, {
 					sql: sql_used,
 					resultSummary: result_summary,
@@ -246,7 +286,13 @@ export function registerVerifyTools(server: McpServer) {
 			const violations: Array<{ rule: string; severity: string; description: string }> = [];
 			const manualRules: string[] = [];
 
+			const resultLower = result_summary.toLowerCase();
 			for (const rule of rulesToCheck) {
+				// When the caller provided an explicit applicable_rules list,
+				// trust it (they've scoped manually). Otherwise apply the same
+				// applies_to-gate used by verify_result so global rules don't
+				// flood per-query output.
+				if (!applicable_rules && !ruleInScope(rule.applies_to, new Set(), resultLower)) continue;
 				const result = evaluateRule(rule, { resultSummary: result_summary, piiColumnNames });
 				if (result.outcome.status === 'fail') {
 					violations.push({

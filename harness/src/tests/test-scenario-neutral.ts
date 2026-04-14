@@ -225,7 +225,21 @@ if (optionalSignal) {
 	}
 }
 
-// ── 8. Travel rule does NOT apply to minimal SQL (no leakage) ──────────────
+// ── 8. Rule applies_to scoping (Fix #3) — rules not in query scope are silent
+// We assert at the config-shape level that rules carry applies_to with a
+// bare table token so the verify tool's scope gate has something to work
+// with. The full runtime behaviour (manual notices only for rules whose
+// table appears in the SQL / result text) is covered by verify.ts itself.
+for (const r of travelRules) {
+	if (r.severity !== 'error') continue;
+	const firstTable = r.applies_to?.[0]?.split('.')[0] ?? '';
+	assert(
+		firstTable.length > 0,
+		`travel rule ${r.name} declares a table in applies_to — enables scope-gated verification`,
+	);
+}
+
+// ── 9. Travel rule does NOT apply to minimal SQL (no leakage) ──────────────
 if (revenueRule) {
 	const out = evaluateRule(revenueRule, {
 		sql: 'SELECT SUM(order_amount) FROM public.orders', // minimal-shaped SQL
