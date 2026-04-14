@@ -48,6 +48,13 @@ export interface AgentScope {
 	bundleJoins: BundleConfig['joins'];
 	/** Time-filter requirements (table, column, max_days). */
 	timeFilters: BundleConfig['time_filters'];
+	/**
+	 * Policy max_rows ceiling (from policies/policy.yml > defaults.max_rows).
+	 * Used as the default LIMIT when the request omits one and as the cap
+	 * for any explicit limit. Prevents the compiler from emitting a SELECT
+	 * that the governance gate would block immediately for being too wide.
+	 */
+	maxRows: number;
 }
 
 const SET_OPS = new Set<FilterOp>(['in', 'not_in']);
@@ -174,16 +181,25 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 	});
 
 	// ── Plan dimensions (apply optional time_grain) ───────────────────────
+	// When time_grain applies, stamp the grain literal once into params
+	// and share its placeholder index across every dimension that uses
+	// it. Compiler emits date_trunc($N, column) — no string interpolation.
+	let timeGrainParamIndex: number | undefined;
 	const dimensions: PlannedDimension[] = resolvedDimensions.map((rd) => {
 		const baseColumn = `${rd.model.name}.${rd.dimension.column}`;
 		const isTime = rd.dimension.column === rd.model.time_dimension;
+		const useGrain = request.time_grain && isTime;
+		if (useGrain && timeGrainParamIndex === undefined) {
+			timeGrainParamIndex = recordParam(timeGrainToSqlUnit(request.time_grain!));
+		}
 		return {
 			ref: rd.ref,
 			field: rd.dimension.name,
 			modelAlias: rd.model.name,
 			column: baseColumn,
 			outputAlias: rd.dimension.name,
-			timeGrain: request.time_grain && isTime ? request.time_grain : undefined,
+			timeGrain: useGrain ? request.time_grain : undefined,
+			timeGrainParamIndex: useGrain ? timeGrainParamIndex : undefined,
 		};
 	});
 
@@ -293,7 +309,11 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 	const orderBy: PlannedOrderBy[] = (request.order_by ?? []).map((o) => buildOrderBy(o, measures, dimensions));
 
 	// ── Limit ─────────────────────────────────────────────────────────────
-	const limit = clampLimit(request.limit);
+	// Default to scope.maxRows (driven by policy), cap explicit values at
+	// the same ceiling. Stamp the integer into params so the compiler can
+	// emit `LIMIT $N` rather than interpolating a literal.
+	const limit = clampLimit(request.limit, scope.maxRows);
+	const limitParamIndex = recordParam(limit);
 
 	return {
 		models: planned,
@@ -304,6 +324,7 @@ export function plan(request: MetricQueryRequest, registry: SemanticRegistry, sc
 		havingFilters,
 		orderBy,
 		limit,
+		limitParamIndex,
 		appliedTimeWindow,
 		params,
 	};
@@ -437,12 +458,13 @@ function validateTimeRange(tr: { start: string; end: string }): void {
 	}
 }
 
-function clampLimit(n?: number): number {
-	if (n === undefined) return DEFAULT_LIMIT;
+function clampLimit(n: number | undefined, maxRows: number): number {
+	const ceiling = Math.min(maxRows > 0 ? maxRows : DEFAULT_LIMIT, MAX_LIMIT);
+	if (n === undefined) return ceiling;
 	if (!Number.isInteger(n) || n <= 0) {
 		throw new SemanticError('invalid_value', `limit must be a positive integer (got ${n}).`);
 	}
-	return Math.min(n, MAX_LIMIT);
+	return Math.min(n, ceiling);
 }
 
 /**

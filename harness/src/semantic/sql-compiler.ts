@@ -21,7 +21,6 @@ import type {
 	QueryPlan,
 	WherePredicate,
 } from './types.js';
-import { timeGrainToSqlUnit } from './planner.js';
 
 export function compile(plan: QueryPlan): CompiledSql {
 	const select = buildSelect(plan.dimensions, plan.measures);
@@ -31,7 +30,9 @@ export function compile(plan: QueryPlan): CompiledSql {
 	const groupBy = buildGroupBy(plan.dimensions);
 	const having = buildHaving(plan.havingFilters);
 	const orderBy = buildOrderBy(plan.orderBy);
-	const limit = `LIMIT ${plan.limit}`;
+	// LIMIT is bound as a positional pg parameter (its index is set by
+	// the planner) so no integer literal is interpolated into SQL text.
+	const limit = `LIMIT $${plan.limitParamIndex}`;
 
 	const parts = [select, from, joins, where, groupBy, having, orderBy, limit].filter((s) => s && s.length > 0);
 	const sql = parts.join('\n');
@@ -58,7 +59,11 @@ function buildSelect(dims: PlannedDimension[], measures: PlannedMeasure[]): stri
 
 function formatDimensionExpression(d: PlannedDimension): string {
 	if (d.timeGrain) {
-		return `date_trunc('${timeGrainToSqlUnit(d.timeGrain)}', ${qualifyColumn(d.column)})`;
+		// Grain literal is in plan.params at d.timeGrainParamIndex; pg
+		// accepts date_trunc(text, timestamp), so a placeholder works.
+		// Cast keeps pg's type inference happy when the param is bound
+		// as text.
+		return `date_trunc($${d.timeGrainParamIndex}::text, ${qualifyColumn(d.column)})`;
 	}
 	return qualifyColumn(d.column);
 }

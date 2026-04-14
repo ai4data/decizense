@@ -63,6 +63,10 @@ export async function runMetricQuery(
 		sql: compiled.sql,
 		metric_refs: planned.measures.map((m) => m.ref),
 		tool_name: 'query_metrics',
+		// LIMIT is bound as $N (R6: no literal interpolation), so OPA's
+		// regex-based limit detector wouldn't see it. Tell OPA the value
+		// directly — the planner has already clamped it to scope.maxRows.
+		limit_value_override: planned.limit,
 	});
 	if (!governance.allowed) {
 		throw new SemanticError('governance_blocked', governance.reason ?? 'Governance blocked the metric query.', {
@@ -118,8 +122,10 @@ export async function runMetricQuery(
 function resolveAgentScope(l: ScenarioLoader, agentId: string): AgentScope {
 	const agents = l.agents;
 	const agentConfig = agents.agents[agentId];
+	const policy = l.policy;
+	const maxRows = policy?.defaults?.max_rows ?? 1000;
 	if (!agentConfig?.bundle) {
-		return { bundleId: '(none)', bundleTables: new Set(), bundleJoins: [], timeFilters: [] };
+		return { bundleId: '(none)', bundleTables: new Set(), bundleJoins: [], timeFilters: [], maxRows };
 	}
 	try {
 		const bundle = l.getBundle(agentConfig.bundle);
@@ -128,8 +134,9 @@ function resolveAgentScope(l: ScenarioLoader, agentId: string): AgentScope {
 			bundleTables: new Set(bundle.tables.map((t) => t.table)),
 			bundleJoins: bundle.joins ?? [],
 			timeFilters: bundle.time_filters ?? [],
+			maxRows,
 		};
 	} catch {
-		return { bundleId: agentConfig.bundle, bundleTables: new Set(), bundleJoins: [], timeFilters: [] };
+		return { bundleId: agentConfig.bundle, bundleTables: new Set(), bundleJoins: [], timeFilters: [], maxRows };
 	}
 }

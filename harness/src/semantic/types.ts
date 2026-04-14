@@ -110,6 +110,12 @@ export interface PlannedDimension {
 	outputAlias: string;
 	/** If set, GROUP BY uses date_trunc(grain, column) instead of column. */
 	timeGrain?: TimeGrain;
+	/**
+	 * When timeGrain is set, the grain literal is stamped into
+	 * QueryPlan.params and the placeholder index lives here. Compiler
+	 * emits `date_trunc($N, column)` with no string interpolation.
+	 */
+	timeGrainParamIndex?: number;
 }
 
 /**
@@ -148,6 +154,11 @@ export interface QueryPlan {
 	havingFilters: HavingPredicate[];
 	orderBy: PlannedOrderBy[];
 	limit: number;
+	/**
+	 * Index into params holding the integer LIMIT value. Compiler emits
+	 * `LIMIT $N` rather than interpolating a literal.
+	 */
+	limitParamIndex: number;
 	/**
 	 * The actual time window applied (after time_range and time_grain),
 	 * surfaced in the response so callers can see what was queried.

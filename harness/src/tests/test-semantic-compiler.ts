@@ -75,12 +75,14 @@ const flightOpsScope: AgentScope = {
 	bundleTables: new Set(['flights', 'airports', 'airlines', 'flight_delays']),
 	bundleJoins: travel.getBundle('flights-ops').joins ?? [],
 	timeFilters: travel.getBundle('flights-ops').time_filters ?? [],
+	maxRows: travel.policy.defaults.max_rows,
 };
 const widgetScope: AgentScope = {
 	bundleId: 'widgets-ops',
 	bundleTables: new Set(['widgets', 'orders']),
 	bundleJoins: minimal.getBundle('widgets-ops').joins ?? [],
 	timeFilters: [],
+	maxRows: 500,
 };
 
 // ── 1. Registry resolution ────────────────────────────────────────────────
@@ -127,7 +129,11 @@ assertEqual(
 	'flights.scheduled_departure',
 	'window column resolved from model.time_dimension',
 );
-assertEqual(simplePlan.params.length, 4, 'params: 1 measure-filter + 1 user filter + 2 time bounds');
+assertEqual(
+	simplePlan.params.length,
+	5,
+	'params: 1 measure-filter + 2 time bounds + 1 user filter + 1 LIMIT (now bound, R6)',
+);
 
 // ── 3. Compiler: golden SQL ───────────────────────────────────────────────
 
@@ -137,6 +143,7 @@ const compiled = compile(simplePlan);
 //   $2, $3 — time_range start / end (planner adds time bounds before
 //             the loop over user filters)
 //   $4 — user filter literal ("cancelled")
+//   $5 — LIMIT integer (R6 fix: bound, not interpolated)
 // Compiler renders WHERE clauses in plan.whereFilters order: the
 // time-bound predicates first, then the user filter.
 const expectedSql = [
@@ -145,14 +152,15 @@ const expectedSql = [
 	'WHERE "flights"."scheduled_departure" >= $2 AND "flights"."scheduled_departure" < $3 AND "flights"."status" != $4',
 	'GROUP BY 1',
 	'ORDER BY "delayed_flights" DESC',
-	'LIMIT 10',
+	'LIMIT $5',
 ].join('\n');
 assertEqual(compiled.sql, expectedSql, 'golden SQL: airline × delayed + total, March 2026');
-assertEqual(compiled.params.length, 4, 'compiled params count matches plan');
+assertEqual(compiled.params.length, 5, 'compiled params count matches plan (incl. LIMIT)');
 assertEqual(compiled.params[0], 'delayed', "param 1 = measure-filter literal 'delayed'");
 assertEqual(compiled.params[1], '2026-03-01', 'param 2 = time_range start');
 assertEqual(compiled.params[2], '2026-04-01', 'param 3 = time_range end');
 assertEqual(compiled.params[3], 'cancelled', "param 4 = user filter literal 'cancelled'");
+assertEqual(compiled.params[4], 10, 'param 5 = LIMIT integer');
 
 // ── 4. HAVING filter (post-aggregation, on a measure) ─────────────────────
 
@@ -185,7 +193,13 @@ const grainPlan = plan(
 	flightOpsScope,
 );
 const grainSql = compile(grainPlan).sql;
-assert(grainSql.includes("date_trunc('week'"), "time_grain=week → date_trunc('week', ...)");
+// R6 fix: grain literal is no longer interpolated; it lives in params
+// and is referenced via a $N::text placeholder.
+assert(
+	/date_trunc\(\$\d+::text,/.test(grainSql),
+	'time_grain=week → date_trunc($N::text, ...) (R6: bound, not interpolated)',
+);
+assert(grainPlan.params.includes('week'), "the 'week' grain literal is in plan.params");
 
 // ── 6. Bundle scope refusal ───────────────────────────────────────────────
 
@@ -202,6 +216,7 @@ const noJoinScope: AgentScope = {
 	bundleTables: new Set(['flights', 'flight_delays']),
 	bundleJoins: [], // no joins declared
 	timeFilters: [], // strip the bundle's time-filter requirement so we test the join failure cleanly
+	maxRows: 500,
 };
 expectError(
 	() =>
@@ -235,6 +250,7 @@ const reversedJoinScope: AgentScope = {
 		},
 	],
 	timeFilters: [],
+	maxRows: 500,
 };
 
 const reversedPlan = plan(
@@ -278,6 +294,7 @@ const fanoutScope: AgentScope = {
 		},
 	],
 	timeFilters: [],
+	maxRows: 500,
 };
 expectError(
 	() =>
@@ -367,6 +384,21 @@ expectError(
 	'time_filter_required',
 	'missing time_range on a time-required bundle → time_filter_required',
 );
+
+// 11b-2. Default limit honours policy max_rows (R6 fix). Without an
+// explicit limit, the planner must default to scope.maxRows (which the
+// executor sources from policies/policy.yml > defaults.max_rows), not
+// to a hardcoded 1000 that would exceed travel's max and trip the
+// governance gate.
+const defaultLimitPlan = plan(
+	{
+		measures: ['flights.total_flights'],
+		time_range: { start: '2026-03-01', end: '2026-04-01' },
+	},
+	travelRegistry,
+	flightOpsScope,
+);
+assertEqual(defaultLimitPlan.limit, flightOpsScope.maxRows, 'omitted limit defaults to scope.maxRows');
 
 // 11c. Time-filter requirement: a window WIDER than max_days must fail.
 // Reviewer R5 finding: previously the planner only checked filter
