@@ -1,4 +1,4 @@
-# dazense harness
+# decizense harness
 
 A governed multi-agent decision platform. Plug in your data, configure your scenario, and AI agents make governed decisions — with full audit trails, evidence links, and risk-based approval gates.
 
