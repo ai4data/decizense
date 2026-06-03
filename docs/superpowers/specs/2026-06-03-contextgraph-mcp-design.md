@@ -100,6 +100,7 @@ ContextGraph-MCP
         v
 External systems
   - OPA
+  - OPA decision log sink: Postgres or append-only file
   - catalog provider: OpenMetadata, DataHub, dbt, custom
   - scenario database: Postgres, DuckDB, warehouse
 ```
@@ -116,9 +117,11 @@ Exposes the public MCP tools. The first extraction should keep the existing tool
 - decision tools
 - memory tools
 - governance and verification tools
-- health/admin tools where needed for operations
+- health/admin tools where needed for operations, including an operational `replay_decision(decision_id)` admin tool
 
 The tool surface is the product API. It must stay stable enough for Decizense and external agents to depend on it.
+
+ContextGraph-MCP does not expose `start_decision_workflow`. Workflow lifecycle belongs to the client agent runtime.
 
 ### Scenario Loader
 
@@ -150,6 +153,7 @@ It handles:
 - PII blocking
 - SQL validation
 - OPA evaluation
+- durable OPA decision logging and replay (admin)
 - risk classification
 - approval and execution permissions
 
@@ -186,11 +190,17 @@ It includes:
 - findings
 - memory entries
 - searchable precedents
-- OPA decision log links
+- links to the OPA decision log sink, see Governance Engine
 - evidence links
-- workflow/correlation identifiers
+- case and request correlation identifiers
 
 This is core product data, not optional logging. Decizense can read it for UI and product experience, but ContextGraph-MCP owns the persistence contract.
+
+Decision and memory persistence uses plain Postgres tables: `cases`, `proposals`, `approvals`, `outcomes`, `findings`, `memory_entries`, and `audit_log`. Writes are synchronous and ACID through Postgres alone.
+
+`audit_log` records tool-call audits. The OPA decision log is a separate durable sink correlated by `case_id` and `request_id`.
+
+The harness is stateless with respect to agent workflow durability. Clients supply `case_id` as a UUID that identifies the business case across tool calls, and `request_id` as a UUID for each tool call. The harness uses `request_id` and deterministic IDs for idempotent dedupe with `ON CONFLICT DO NOTHING` upserts. If the harness crashes between a SQL write and the HTTP response, the client retries with the same `request_id`, and the write remains safe to repeat. Crash recovery and workflow durability belong to the client agent runtime.
 
 ### Catalog Adapter Interface
 
@@ -213,14 +223,14 @@ OpenMetadata is the first adapter. Other providers must fit behind the same inte
 
 ## Request flow
 
-1. MCP client calls a ContextGraph-MCP tool.
+1. MCP client calls a ContextGraph-MCP tool, supplying `case_id` and `request_id` when the call writes state or triggers side effects.
 2. Auth resolves agent, session, and delegated user context.
 3. Scenario Loader provides the active scenario configuration.
 4. Governance Engine checks bundle scope, PII, SQL rules, OPA, and risk permissions.
 5. Semantic Layer compiles safe SQL when the request is metric-based.
 6. Catalog Adapter supplies metadata when context or governance needs it.
 7. Scenario database executes only approved queries/actions.
-8. Decision & Memory Layer records findings, decisions, outcomes, evidence, and audit links.
+8. Decision & Memory Layer records findings, decisions, outcomes, evidence, and audit links with idempotent `request_id` dedupe.
 9. Tool returns a governed response.
 
 ## Error handling
@@ -239,6 +249,8 @@ Examples:
 - disallowed join returns a structured governance error
 - out-of-bundle table access returns a blocked response
 - PII access is blocked before SQL and filtered after results
+- duplicate `request_id` returns the previously persisted result without re-executing side effects
+- OPA decision log capture failure is logged but does not block governed execution; the live policy decision is still enforced
 
 ## Testing strategy
 
@@ -250,8 +262,10 @@ Required tests:
 - each MCP tool works through the standalone server
 - `flight_ops` can query allowed flight operations tables
 - `flight_ops` is blocked from bookings, payments, tickets, checkins, customers, and events
-- OPA decisions are logged and replayable
+- OPA decision log is captured in a durable sink, correlated with `case_id` / `request_id`, and `replay_decision(decision_id)` returns both original and current verdicts plus bundle revisions
 - decision traces can be written and queried
+- decision/memory persistence is durable via plain Postgres with no DBOS dependency
+- tool call dedupe works correctly when a client retries with the same `request_id`
 - semantic metric requests compile parameterized SQL
 - unsafe joins, unknown fields, missing time filters, and fanout risks are rejected
 - PII is blocked before SQL and redacted from result persistence
@@ -288,7 +302,9 @@ Included:
 - catalog interface and OpenMetadata adapter
 - semantic compiler/executor
 - governance and OPA integration
-- decision/memory persistence
+- OPA decision log capture into durable sink, either Postgres or append-only file, correlated with `case_id` / `request_id`, and a `replay_decision` admin tool that re-evaluates stored decision inputs against the current policy bundle
+- rewrite decision/memory persistence from DBOS to plain Postgres
+- delete old `harness/src/workflows/` and the `@dbos-inc/dbos-sdk` harness dependency
 
 Excluded:
 
@@ -296,6 +312,7 @@ Excluded:
 - Decizense backend product UX
 - agent runtime implementation
 - app-specific onboarding
+- embedded workflow engine
 
 ### Phase 2: Decizense client integration
 
@@ -323,6 +340,7 @@ Add:
 - Wiring user-created agents
 - Building a catalog UI
 - Building a policy studio
+- Embedding a workflow engine. Clients bring their own with LangGraph savers, Temporal, DBOS as a client-side dependency, Restate, or no workflow engine.
 - Supporting every catalog provider
 - Supporting every database provider
 - Redesigning Decizense frontend/backend
@@ -334,6 +352,7 @@ These decisions keep the first extraction small and tied to working code:
 
 - ContextGraph-MCP starts as a separate repository. Temporary staging inside the Decizense repo is allowed only as an implementation tactic, not as the product boundary.
 - The first standalone database target is Postgres because the current harness persistence and travel scenario already use it. DuckDB and warehouse adapters come later.
+- DBOS is removed from harness in this extraction. Decision/Memory persistence uses plain Postgres tables. Workflow durability is the client agent runtime's responsibility.
 - OpenMetadata bot provisioning stays as helper tooling, not core runtime behavior.
 - Admin tools are private/operational by default. Public v1 tools are the governed MCP tools needed by clients and agents.
 
@@ -348,4 +367,11 @@ The design is successful when:
 - scenario packs stay external and config-driven
 - governance remains fail-closed
 - decision traces are stored and queryable
+- harness `package.json` has no `@dbos-inc/*` dependency
+- `replay_decision(decision_id)` returns original and current verdicts for any captured decision
 - current travel scenario behavior remains intact after extraction
+
+## Revision history
+
+- 2026-06-03: Locked DBOS removal from harness. Workflow durability moves to client agent runtimes, while Decision & Memory persistence uses plain Postgres with `case_id` / `request_id` idempotency.
+- 2026-06-03: Added Phase 1 scope for durable OPA decision log capture and private `replay_decision(decision_id)` admin replay.
