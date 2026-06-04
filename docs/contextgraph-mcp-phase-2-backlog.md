@@ -63,7 +63,11 @@ and extended for the new contract.
 
 - [x] **D1.** Config flag to select embedded harness vs external
       ContextGraph-MCP, defaulting to embedded until A-items land.
-- [ ] **D2.** Dual-run / shadow period; compare outputs.
+- [x] **D2.** Dual-run / shadow period. Phase 2 contract suite
+      (`test-correlation-unit`, `test-phase2-vertical-slice`) passes against the
+      external server with `HARNESS_MODE=external` (scenario travel, live OPA).
+      Legacy `test-*` suite NOT yet shadow-validated (C3–C5, future) — those don't
+      bind `case_id` and will fail correlated calls until ported.
 - [ ] **D3.** Cutover to external; decommission embedded harness (A6).
 - [ ] **D4.** Update CLI (`dazense chat`/`sync`) and dev scripts to launch or
       depend on the external server.

@@ -50,9 +50,11 @@ exactly as before.
 
 ## Contract clients must honor (Phase 1)
 
-Every **state-changing** tool now requires `case_id` and `request_id` (UUIDs):
-`write_finding`, `propose_decision`, `approve_decision`, `execute_decision_action`,
-`execute_action`, `record_outcome`, `save_memory`, `query_data`, `query_metrics`.
+Every **correlated** tool now requires `case_id` and `request_id` (UUIDs): the
+business-state-changing tools (`write_finding`, `propose_decision`,
+`approve_decision`, `execute_decision_action`, `execute_action`, `record_outcome`,
+`save_memory`) plus `query_data` / `query_metrics` — the latter are reads but must
+be correlated for OPA decision-log / audit purposes.
 
 - `case_id` — one per business case (e.g. a chat/decision session); reused across
   all related tool calls.
