@@ -14,6 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { exportTraceContext } from './tracing.js';
 import { withCorrelation } from './correlation.js';
+import { HARNESS_HTTP_URL } from './config.js';
 
 export interface EntityDetailsColumn {
 	name: string;
@@ -61,7 +62,7 @@ export class HarnessClient {
 	 * startup time.
 	 */
 	async connect(_scenarioPath?: string): Promise<void> {
-		const url = new URL(process.env.HARNESS_HTTP_URL ?? 'http://127.0.0.1:9080/mcp');
+		const url = new URL(HARNESS_HTTP_URL);
 
 		const headers: Record<string, string> = {
 			'X-Agent-Id': this.agentId,

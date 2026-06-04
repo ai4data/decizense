@@ -10,20 +10,25 @@ item should get its own spec/plan before implementation.
 The Phase 1 contract made `case_id`/`request_id` required on state-changing
 tools. The Decizense client must supply them.
 
-- [ ] **A1. Case lifecycle.** Mint one `case_id` per chat/decision session;
+- [x] **A1. Case lifecycle.** Mint one `case_id` per chat/decision session;
       thread it through the orchestrator and sub-agents. Decide ownership: backend
       (`apps/backend/src/services/mcp.service.ts`) vs agent runtime (`agents/`).
-- [ ] **A2. request_id per call.** Generate a fresh UUID per tool invocation in
+- [x] **A2. request_id per call.** Generate a fresh UUID per tool invocation in
       `agents/src/harness-client.ts`; reuse only on explicit retry.
-- [ ] **A3. Update callers.** Pass `case_id`/`request_id` from every state-
+- [x] **A3. Update callers.** Pass `case_id`/`request_id` from every state-
       changing call site: `agents/src/{flight-ops,booking,customer-service,
 orchestrator}.ts`, deep-agent tools, and `apps/backend/src/agents/tools/`.
-- [ ] **A4. Proposal IDs are UUIDs.** Update any integer assumptions in agent
+- [x] **A4. Proposal IDs are UUIDs.** (no-op in scope — no in-scope code assumes integer proposal_id; only legacy removed-tool tests, deferred to A6) Update any integer assumptions in agent
       code/tests that handle `proposal_id`.
-- [ ] **A5. save_memory semantics.** Adjust callers that relied on
+- [x] **A5. save_memory semantics.** (no-op in scope — no save_memory callers in wired paths) Adjust callers that relied on
       upsert-by-key; new behavior appends idempotent `memory_entries` rows.
 - [ ] **A6. Retire embedded harness.** After cutover, delete this repo's
       `harness/` and point all tooling/scripts at `..\contextgraph-mcp`.
+      **Legacy removed-tool cleanup (track here so they aren't forgotten):**
+      `agents/src/fire-workflow.ts` and `agents/src/test-idempotency.ts` both call
+      the removed `start_decision_workflow` tool and are broken against the
+      external server — delete or rewrite them during A6. (Also why A4's integer
+      `proposal_id` ref is out of scope: it lives in `test-idempotency.ts`.)
 - [ ] **A7. Client-side workflow durability.** Decizense agents keep their own
       durability (DBOS-on-agent-side already present in `agents/src/workflows/`);
       confirm it no longer assumes server-side workflow tools.
@@ -43,9 +48,9 @@ orchestrator}.ts`, deep-agent tools, and `apps/backend/src/agents/tools/`.
 The legacy `agents/src/test-*.ts` suite must be re-pointed at ContextGraph-MCP
 and extended for the new contract.
 
-- [ ] **C1.** End-to-end agent ↔ ContextGraph-MCP happy path with real
+- [x] **C1.** End-to-end agent ↔ ContextGraph-MCP happy path with real
       `case_id`/`request_id`.
-- [ ] **C2.** Retry/idempotency at the client boundary (duplicate `request_id`
+- [x] **C2.** Retry/idempotency at the client boundary (duplicate `request_id`
       returns prior result through the full stack).
 - [ ] **C3.** Concurrency (`test-concurrency.ts`), delegation/JWT
       (`test-delegation.ts`, `test-auth.ts`), OPA equivalence
@@ -56,7 +61,7 @@ and extended for the new contract.
 
 ## D. Rollout
 
-- [ ] **D1.** Config flag to select embedded harness vs external
+- [x] **D1.** Config flag to select embedded harness vs external
       ContextGraph-MCP, defaulting to embedded until A-items land.
 - [ ] **D2.** Dual-run / shadow period; compare outputs.
 - [ ] **D3.** Cutover to external; decommission embedded harness (A6).

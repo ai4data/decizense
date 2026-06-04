@@ -64,15 +64,26 @@ See `..\contextgraph-mcp\docs\PHASE-1-HANDOFF.md` for the full migration notes
 (proposal IDs are UUIDs, `save_memory` no longer upserts `agent_memory`,
 `replay_outcome` → `replay_decision`, etc.).
 
+## Rollout flag: `HARNESS_MODE`
+
+`agents/src/config.ts` exposes `HARNESS_MODE` (`embedded` | `external`, default
+`embedded`) and `HARNESS_HTTP_URL`. Both modes use the same HTTP client + URL —
+the flag is the dual-run switch and documents which server operators launch
+(this repo's in-tree `harness/` vs `..\contextgraph-mcp`). The default stays
+`embedded` until the client wiring is proven and a clean shadow run is observed,
+then it flips to `external` (see the backlog rollout section).
+
 ## Known gap (tracked, not yet wired)
 
-Decizense's client (`agents/src/harness-client.ts`, the per-agent callers, and
-`apps/backend/src/services/mcp.service.ts`) does **not** yet send
-`case_id`/`request_id`. Until the Phase 2 wiring lands, state-changing calls
-against ContextGraph-MCP will be rejected by Zod validation. Options meanwhile:
+The client wiring is now implemented: `HarnessClient.callTool` injects
+`case_id`/`request_id` for correlated tools, the orchestrator binds a
+replay-stable per-run `case_id` (and replay-stable request_ids for durable
+writes), the standalone agents bind a per-run `case_id`, and the backend injects
+per-turn via the AI SDK `experimental_context`. What remains is rollout: run the
+shadow suite with `HARNESS_MODE=external`, then flip the default (backlog D2–D3).
 
-- run against this repo's legacy embedded `harness/` for demos, or
-- complete the Phase 2 client wiring (see backlog).
-
-This repo's embedded `harness/` is legacy once the external server is adopted; it
-should be removed after Phase 2 cutover so there is a single source of truth.
+Legacy tooling that targets the removed `start_decision_workflow`
+(`agents/src/fire-workflow.ts`, `agents/src/test-idempotency.ts`) is broken
+against the external server by design and is tracked for removal under backlog
+A6. This repo's embedded `harness/` is likewise legacy once the external server
+is the default and should be removed after cutover (single source of truth).
