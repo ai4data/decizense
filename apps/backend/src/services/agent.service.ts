@@ -185,12 +185,19 @@ class AgentManager {
 
 				const messages = await this._buildModelMessages(uiMessages);
 
+				// One business case per chat turn. Threaded to ContextGraph-MCP tools
+				// via experimental_context; the MCP tool executor injects it as case_id
+				// (with a fresh request_id) on correlated calls. The backend is not a
+				// DBOS workflow, so a per-turn random id is safe here.
+				const caseId = crypto.randomUUID();
+
 				result = await this._agent.stream({
 					messages,
 					abortSignal: this._abortController.signal,
 					// @ts-expect-error - experimental_context is not yet in the types
 					experimental_context: {
 						projectFolder: project.path,
+						caseId,
 					},
 				});
 

@@ -8,6 +8,7 @@ import { env } from '../env';
 import { mcpJsonSchema, McpServerConfig, McpServerState } from '../types/mcp';
 import { prefixToolName, removePrefixToolName, sanitizeTools } from '../utils/tools';
 import { replaceEnvVars } from '../utils/utils';
+import { withCorrelation } from './correlation';
 
 export class McpService {
 	private _mcpJsonFilePath: string;
@@ -170,15 +171,18 @@ export class McpService {
 			this._mcpTools[toolName] = {
 				description: tool.description,
 				inputSchema: jsonSchema(tool.inputSchema as JSONSchema7),
-				execute: async (toolArgs: Record<string, unknown>) => {
-					return await this._callTool(toolName, toolArgs);
+				execute: async (toolArgs: Record<string, unknown>, options?: { experimental_context?: unknown }) => {
+					// case_id is supplied per turn via the AI SDK experimental_context
+					// (set in AgentService.stream). The LLM never provides it.
+					const caseId = (options?.experimental_context as { caseId?: string } | undefined)?.caseId;
+					return await this._callTool(toolName, toolArgs, caseId);
 				},
 			};
 			this._toolsToServer.set(toolName, serverName);
 		}
 	}
 
-	private async _callTool(toolName: string, toolArgs: Record<string, unknown>): Promise<unknown> {
+	private async _callTool(toolName: string, toolArgs: Record<string, unknown>, caseId?: string): Promise<unknown> {
 		const serverName = this._toolsToServer.get(toolName);
 		if (!serverName) {
 			throw new Error(`Tool ${toolName} not found in any server`);
@@ -188,8 +192,13 @@ export class McpService {
 			throw new Error('Runtime not initialized');
 		}
 
-		const result = await this._runtime.callTool(serverName, removePrefixToolName(toolName), {
-			args: toolArgs,
+		const bareName = removePrefixToolName(toolName);
+		// Inject case_id + a fresh request_id for correlated tools (no-op for reads
+		// and when no case is bound).
+		const finalArgs = caseId ? withCorrelation(bareName, toolArgs, caseId) : toolArgs;
+
+		const result = await this._runtime.callTool(serverName, bareName, {
+			args: finalArgs,
 		});
 
 		return result;

@@ -1,3 +1,5 @@
+// NOTE: kept byte-identical to agents/src/correlation.ts until a shared package
+// exists. The backend must NOT import across workspaces (from agents/src).
 import { randomUUID } from 'node:crypto';
 
 /**
