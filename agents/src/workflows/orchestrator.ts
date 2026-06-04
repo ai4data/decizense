@@ -81,20 +81,28 @@ const TOKEN_ENV_MAP: Record<string, string> = {
 };
 
 /**
- * Derive a stable business-case UUID from the durable workflow_id. Must be
- * deterministic: this runs inside a DBOS workflow that replays on recovery, so
- * a random id would change across replays and split a single run's findings and
- * outcome across two cases. Derivation from the durable workflow_id is stable
- * across replays and across same-workflow_id resumes. Shaped as a v5 UUID so it
+ * Deterministic v5-shaped UUID from a seed. Used for BOTH case_id and the
+ * per-side-effect request_id inside the orchestrator. This is a DBOS workflow
+ * that replays on recovery, so any id a side effect sends MUST be a pure
+ * function of durable inputs (workflow_id + a stable label). A random id would
+ * change on replay — splitting a run's findings/outcome across two cases
+ * (case_id), or defeating the server's request_id dedupe after a
+ * post-write/pre-checkpoint crash (request_id). Shaped as a v5 UUID so it
  * passes the server's `z.string().uuid()` validation.
  */
-function deterministicCaseId(workflowId: string): string {
-	const hex = createHash('sha1').update(`contextgraph-case:${workflowId}`).digest('hex').slice(0, 32).split('');
+function deterministicUuid(seed: string): string {
+	const hex = createHash('sha1').update(seed).digest('hex').slice(0, 32).split('');
 	hex[12] = '5'; // version 5
 	hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16); // variant 8/9/a/b
 	const s = hex.join('');
 	return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20, 32)}`;
 }
+
+const caseIdFor = (workflowId: string): string => deterministicUuid(`contextgraph-case:${workflowId}`);
+
+/** Replay-stable request_id for a durable side effect, keyed by a stable label. */
+const requestIdFor = (workflowId: string, label: string): string =>
+	deterministicUuid(`contextgraph-req:${workflowId}:${label}`);
 
 /**
  * Open a short-lived HarnessClient connection for a given agent, bind the run's
@@ -122,15 +130,19 @@ async function withHarnessClient<T>(agentId: string, caseId: string, fn: (h: Har
  * executes the LLM loop with the sub-agent's governance scope, writes its
  * finding, and returns the answer text.
  *
- * Retries of this step (post-crash) are safe because write_finding computes
- * a server-side idempotency_key from (session_id, agent_id, finding,
- * confidence, data_sources) and dedupes via a unique index.
+ * write_finding sends a replay-stable request_id derived from (workflow_id,
+ * agent_id, sub_question). If this step's body re-runs after a post-write/
+ * pre-checkpoint crash, the same request_id lets ContextGraph-MCP dedupe the
+ * retry. Correlated read calls (query_data/query_metrics) keep random
+ * request_ids — re-issuing a read on replay only adds a best-effort OPA-log
+ * entry, never a duplicate business side effect.
  */
 async function runSubagentStep(
 	agentId: string,
 	subQuestion: string,
 	sessionId: string,
 	caseId: string,
+	workflowId: string,
 ): Promise<SubagentResult> {
 	return withHarnessClient(agentId, caseId, async (harness) => {
 		const init = (await harness.initializeAgent(sessionId, subQuestion)) as {
@@ -205,7 +217,13 @@ async function runSubagentStep(
 			},
 		);
 
-		await harness.writeFinding(sessionId, answer, 'high', tables);
+		await harness.callTool('write_finding', {
+			session_id: sessionId,
+			finding: answer,
+			confidence: 'high',
+			data_sources: tables,
+			request_id: requestIdFor(workflowId, `finding:${agentId}:${subQuestion}`),
+		});
 		return { agentId, answer };
 	});
 }
@@ -252,7 +270,7 @@ function buildOrchestratorModel(): LanguageModel {
  */
 async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise<OrchestratorWorkflowResult> {
 	const { workflowId, sessionId, question } = input;
-	const caseId = deterministicCaseId(workflowId); // one business case per run, stable across replays
+	const caseId = caseIdFor(workflowId); // one business case per run, stable across replays
 	const state: DeepAgentState = initialState();
 
 	// One-shot harness context fetch — surfaces relevant tables and glossary
@@ -290,7 +308,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 			state,
 			sessionId,
 			runner: async (subagentType, description, sid) => {
-				return runSubagentStep(subagentType, description, sid, caseId);
+				return runSubagentStep(subagentType, description, sid, caseId, workflowId);
 			},
 		}),
 		finalize: createFinalizeTool({
@@ -307,6 +325,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 						cost_usd: 0.15,
 						evidence_rules: [],
 						evidence_signal_types: [],
+						request_id: requestIdFor(workflowId, 'record_outcome'),
 					});
 				});
 			},
@@ -363,6 +382,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 				cost_usd: 0.15,
 				evidence_rules: [],
 				evidence_signal_types: [],
+				request_id: requestIdFor(workflowId, 'record_outcome'),
 			});
 		});
 		state.final = { decision: fallbackDecision, confidence: 'low', evidence: [] };
