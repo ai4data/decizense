@@ -13,6 +13,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { exportTraceContext } from './tracing.js';
+import { withCorrelation } from './correlation.js';
 
 export interface EntityDetailsColumn {
 	name: string;
@@ -38,11 +39,17 @@ export class HarnessClient {
 	private transport: StreamableHTTPClientTransport | null = null;
 	private agentId: string;
 	private token: string | undefined;
+	private caseId: string | null = null;
 
 	constructor(agentId: string, token?: string) {
 		this.client = new Client({ name: 'dazense-agent', version: '0.1.0' }, { capabilities: {} });
 		this.agentId = agentId;
 		this.token = token;
+	}
+
+	/** Bind the business-case id reused across this client's correlated calls. */
+	setCaseId(caseId: string): void {
+		this.caseId = caseId;
 	}
 
 	/**
@@ -82,7 +89,8 @@ export class HarnessClient {
 	}
 
 	async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-		const result = await this.client.callTool({ name, arguments: args });
+		const finalArgs = this.caseId ? withCorrelation(name, args, this.caseId) : args;
+		const result = await this.client.callTool({ name, arguments: finalArgs });
 		const content = result.content as Array<{ type: string; text: string }>;
 		if (content && content[0] && content[0].text) {
 			return JSON.parse(content[0].text);
