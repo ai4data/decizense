@@ -306,6 +306,9 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 	// Updated at the top of each turn so the task runner can stamp findings with a
 	// replay-stable turn ordinal. The task tool runs inside the current turn's
 	// DBOS step, so this is the right value at call time and on a crash-window replay.
+	// CAVEAT: this assumes one task tool-call per turn (stopWhen stepCountIs(1)). If
+	// multiple/parallel task calls per turn are ever enabled, add a per-call ordinal
+	// or tool-call id to the write_finding seed to keep request_ids collision-free.
 	let currentTurnIndex = 0;
 
 	const tools = {

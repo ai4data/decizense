@@ -5,6 +5,8 @@
  *   AZURE_OPENAI_API_KEY=... npx tsx src/booking.ts "How many bookings in March 2026?"
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { HarnessClient } from './harness-client.js';
 import { loadRepoEnv } from './load-env.js';
 import { callLLM } from './llm.js';
@@ -28,6 +30,7 @@ async function main() {
 			const token = process.env.BOOKING_TOKEN;
 			const harness = new HarnessClient(AGENT_ID, token);
 			await harness.connect('../scenario/travel');
+			harness.setCaseId(randomUUID()); // one business case per standalone run (not DBOS — random is safe)
 
 			const init = (await harness.initializeAgent(sessionId, question)) as any;
 			console.log(`Identity: ${init.identity.display_name}`);
