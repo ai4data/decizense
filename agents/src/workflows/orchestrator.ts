@@ -131,11 +131,13 @@ async function withHarnessClient<T>(agentId: string, caseId: string, fn: (h: Har
  * finding, and returns the answer text.
  *
  * write_finding sends a replay-stable request_id derived from (workflow_id,
- * agent_id, sub_question). If this step's body re-runs after a post-write/
- * pre-checkpoint crash, the same request_id lets ContextGraph-MCP dedupe the
- * retry. Correlated read calls (query_data/query_metrics) keep random
- * request_ids — re-issuing a read on replay only adds a best-effort OPA-log
- * entry, never a duplicate business side effect.
+ * turn_index, agent_id, sub_question). The turn index disambiguates the same
+ * agent answering the same sub-question across different turns (without it, the
+ * second write would reuse the first's request_id and be wrongly deduped). If
+ * this step's body re-runs after a post-write/pre-checkpoint crash, the same
+ * request_id lets ContextGraph-MCP dedupe the retry. Correlated read calls
+ * (query_data/query_metrics) keep random request_ids — re-issuing a read on
+ * replay only adds a best-effort OPA-log entry, never a duplicate side effect.
  */
 async function runSubagentStep(
 	agentId: string,
@@ -143,6 +145,7 @@ async function runSubagentStep(
 	sessionId: string,
 	caseId: string,
 	workflowId: string,
+	turnIndex: number,
 ): Promise<SubagentResult> {
 	return withHarnessClient(agentId, caseId, async (harness) => {
 		const init = (await harness.initializeAgent(sessionId, subQuestion)) as {
@@ -222,7 +225,7 @@ async function runSubagentStep(
 			finding: answer,
 			confidence: 'high',
 			data_sources: tables,
-			request_id: requestIdFor(workflowId, `finding:${agentId}:${subQuestion}`),
+			request_id: requestIdFor(workflowId, `finding:turn${turnIndex}:${agentId}:${subQuestion}`),
 		});
 		return { agentId, answer };
 	});
@@ -300,6 +303,11 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 	const model = buildOrchestratorModel();
 	const systemPrompt = buildSystemPrompt(`Catalog context for this run:\n${state.notes['catalog_context']}`);
 
+	// Updated at the top of each turn so the task runner can stamp findings with a
+	// replay-stable turn ordinal. The task tool runs inside the current turn's
+	// DBOS step, so this is the right value at call time and on a crash-window replay.
+	let currentTurnIndex = 0;
+
 	const tools = {
 		write_todos: createWriteTodosTool(state),
 		write_note: createWriteNoteTool(state),
@@ -308,7 +316,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 			state,
 			sessionId,
 			runner: async (subagentType, description, sid) => {
-				return runSubagentStep(subagentType, description, sid, caseId, workflowId);
+				return runSubagentStep(subagentType, description, sid, caseId, workflowId, currentTurnIndex);
 			},
 		}),
 		finalize: createFinalizeTool({
@@ -339,6 +347,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 	const transcript: ModelMessage[] = [];
 	while (!state.finalized && state.turn < MAX_TURNS) {
 		const turnIndex = state.turn;
+		currentTurnIndex = turnIndex;
 		await DBOS.runStep(
 			async () => {
 				const messages: ModelMessage[] = [

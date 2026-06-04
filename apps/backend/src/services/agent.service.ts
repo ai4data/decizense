@@ -225,9 +225,16 @@ class AgentManager {
 
 	async generate(messages: UIMessage[]): Promise<AgentRunResult> {
 		const startTime = performance.now();
+		// One business case per generate() run, threaded to ContextGraph-MCP tools
+		// the same way as stream() so the test/eval path also sends case_id.
+		const caseId = crypto.randomUUID();
 		const result = await this._agent.generate({
 			messages: await this._buildModelMessages(messages),
 			abortSignal: this._abortController.signal,
+			// @ts-expect-error - experimental_context is not yet in the types
+			experimental_context: {
+				caseId,
+			},
 		});
 		const durationMs = Math.round(performance.now() - startTime);
 
