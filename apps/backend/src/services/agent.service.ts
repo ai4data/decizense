@@ -225,14 +225,17 @@ class AgentManager {
 
 	async generate(messages: UIMessage[]): Promise<AgentRunResult> {
 		const startTime = performance.now();
-		// One business case per generate() run, threaded to ContextGraph-MCP tools
-		// the same way as stream() so the test/eval path also sends case_id.
+		// Build the SAME experimental_context shape as stream(): local file/python
+		// tools need projectFolder, and ContextGraph-MCP tools need caseId. Dropping
+		// projectFolder here regresses read/search/list/grep/execute_python.
+		const project = await retrieveProjectById(this.chat.projectId);
 		const caseId = crypto.randomUUID();
 		const result = await this._agent.generate({
 			messages: await this._buildModelMessages(messages),
 			abortSignal: this._abortController.signal,
 			// @ts-expect-error - experimental_context is not yet in the types
 			experimental_context: {
+				projectFolder: project.path,
 				caseId,
 			},
 		});

@@ -8,7 +8,7 @@ import { env } from '../env';
 import { mcpJsonSchema, McpServerConfig, McpServerState } from '../types/mcp';
 import { prefixToolName, removePrefixToolName, sanitizeTools } from '../utils/tools';
 import { replaceEnvVars } from '../utils/utils';
-import { withCorrelation } from './correlation';
+import { CORRELATED_TOOLS, injectCorrelation, stripCorrelationSchema } from './correlation';
 
 export class McpService {
 	private _mcpJsonFilePath: string;
@@ -168,12 +168,18 @@ export class McpService {
 	private async cacheMcpTools(tools: ServerToolInfo[], serverName: string): Promise<void> {
 		for (const tool of tools) {
 			const toolName = tool.name.startsWith(serverName) ? tool.name : prefixToolName(serverName, tool.name);
+			const bareName = removePrefixToolName(toolName);
+			// Hide case_id/request_id from the model-facing schema for correlated
+			// tools — the client injects them; the LLM must never see or supply them.
+			const rawSchema = CORRELATED_TOOLS.has(bareName)
+				? stripCorrelationSchema(tool.inputSchema)
+				: tool.inputSchema;
 			this._mcpTools[toolName] = {
 				description: tool.description,
-				inputSchema: jsonSchema(tool.inputSchema as JSONSchema7),
+				inputSchema: jsonSchema(rawSchema as JSONSchema7),
 				execute: async (toolArgs: Record<string, unknown>, options?: { experimental_context?: unknown }) => {
 					// case_id is supplied per turn via the AI SDK experimental_context
-					// (set in AgentService.stream). The LLM never provides it.
+					// (set in AgentManager.stream/generate). The LLM never provides it.
 					const caseId = (options?.experimental_context as { caseId?: string } | undefined)?.caseId;
 					return await this._callTool(toolName, toolArgs, caseId);
 				},
@@ -193,9 +199,10 @@ export class McpService {
 		}
 
 		const bareName = removePrefixToolName(toolName);
-		// Inject case_id + a fresh request_id for correlated tools (no-op for reads
-		// and when no case is bound).
-		const finalArgs = caseId ? withCorrelation(bareName, toolArgs, caseId) : toolArgs;
+		// Force trusted case_id + a fresh request_id for correlated tools,
+		// OVERWRITING any model-supplied values (the LLM is untrusted for these).
+		// No-op for non-correlated tools.
+		const finalArgs = injectCorrelation(bareName, toolArgs, caseId);
 
 		const result = await this._runtime.callTool(serverName, bareName, {
 			args: finalArgs,
