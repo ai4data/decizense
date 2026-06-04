@@ -24,6 +24,8 @@
  * harness-side dazenseDecisionWorkflow (which uses different, unprefixed IDs).
  */
 
+import { createHash } from 'node:crypto';
+
 import { DBOS } from '@dbos-inc/dbos-sdk';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText, hasToolCall, type LanguageModel, type ModelMessage, stepCountIs } from 'ai';
@@ -79,14 +81,31 @@ const TOKEN_ENV_MAP: Record<string, string> = {
 };
 
 /**
- * Open a short-lived HarnessClient connection for a given agent, run the
- * provided async body, and close the connection cleanly.
+ * Derive a stable business-case UUID from the durable workflow_id. Must be
+ * deterministic: this runs inside a DBOS workflow that replays on recovery, so
+ * a random id would change across replays and split a single run's findings and
+ * outcome across two cases. Derivation from the durable workflow_id is stable
+ * across replays and across same-workflow_id resumes. Shaped as a v5 UUID so it
+ * passes the server's `z.string().uuid()` validation.
  */
-async function withHarnessClient<T>(agentId: string, fn: (h: HarnessClient) => Promise<T>): Promise<T> {
+function deterministicCaseId(workflowId: string): string {
+	const hex = createHash('sha1').update(`contextgraph-case:${workflowId}`).digest('hex').slice(0, 32).split('');
+	hex[12] = '5'; // version 5
+	hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16); // variant 8/9/a/b
+	const s = hex.join('');
+	return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20, 32)}`;
+}
+
+/**
+ * Open a short-lived HarnessClient connection for a given agent, bind the run's
+ * business-case id, run the provided async body, and close cleanly.
+ */
+async function withHarnessClient<T>(agentId: string, caseId: string, fn: (h: HarnessClient) => Promise<T>): Promise<T> {
 	const token = process.env[TOKEN_ENV_MAP[agentId] ?? ''];
 	const harness = new HarnessClient(agentId, token);
 	try {
 		await harness.connect();
+		harness.setCaseId(caseId);
 		return await fn(harness);
 	} finally {
 		try {
@@ -107,8 +126,13 @@ async function withHarnessClient<T>(agentId: string, fn: (h: HarnessClient) => P
  * a server-side idempotency_key from (session_id, agent_id, finding,
  * confidence, data_sources) and dedupes via a unique index.
  */
-async function runSubagentStep(agentId: string, subQuestion: string, sessionId: string): Promise<SubagentResult> {
-	return withHarnessClient(agentId, async (harness) => {
+async function runSubagentStep(
+	agentId: string,
+	subQuestion: string,
+	sessionId: string,
+	caseId: string,
+): Promise<SubagentResult> {
+	return withHarnessClient(agentId, caseId, async (harness) => {
 		const init = (await harness.initializeAgent(sessionId, subQuestion)) as {
 			identity?: { authenticated?: boolean; display_name?: string };
 			scope?: {
@@ -228,13 +252,14 @@ function buildOrchestratorModel(): LanguageModel {
  */
 async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise<OrchestratorWorkflowResult> {
 	const { workflowId, sessionId, question } = input;
+	const caseId = deterministicCaseId(workflowId); // one business case per run, stable across replays
 	const state: DeepAgentState = initialState();
 
 	// One-shot harness context fetch — surfaces relevant tables and glossary
 	// terms; pre-seeded into the scratchpad so the LLM sees it from turn 0.
 	const context = await DBOS.runStep(
 		async () => {
-			return withHarnessClient('orchestrator', async (harness) => {
+			return withHarnessClient('orchestrator', caseId, async (harness) => {
 				return harness.callTool('get_context', { question });
 			});
 		},
@@ -265,13 +290,13 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 			state,
 			sessionId,
 			runner: async (subagentType, description, sid) => {
-				return runSubagentStep(subagentType, description, sid);
+				return runSubagentStep(subagentType, description, sid, caseId);
 			},
 		}),
 		finalize: createFinalizeTool({
 			state,
 			recordOutcome: async ({ decision, confidence, evidence }) => {
-				await withHarnessClient('orchestrator', async (harness) => {
+				await withHarnessClient('orchestrator', caseId, async (harness) => {
 					await harness.callTool('record_outcome', {
 						session_id: sessionId,
 						question,
@@ -327,7 +352,7 @@ async function orchestratorWorkflowFn(input: OrchestratorWorkflowInput): Promise
 			state.taskResults.length > 0
 				? state.taskResults.map((r) => `[${r.subagentType}] ${r.answer}`).join('\n\n')
 				: 'No sub-agent results were collected before the turn limit was reached.';
-		await withHarnessClient('orchestrator', async (harness) => {
+		await withHarnessClient('orchestrator', caseId, async (harness) => {
 			await harness.callTool('record_outcome', {
 				session_id: sessionId,
 				question,
